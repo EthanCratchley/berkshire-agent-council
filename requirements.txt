@@ -1,0 +1,4 @@
+langgraph
+langchain-google-genai
+pandas
+yfinance
