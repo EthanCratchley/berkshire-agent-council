@@ -2,3 +2,7 @@ langgraph
 langchain-google-genai
 pandas
 yfinance
+fredapi
+finnhub-python
+python-dotenv
+pytest==9.0.2

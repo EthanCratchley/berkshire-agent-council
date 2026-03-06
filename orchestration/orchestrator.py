@@ -1,6 +1,6 @@
 from shared.state_schema import BerkshireState
 
-def should_continue(state: BerkshireState):
+def orchestrator(state: BerkshireState):
     """
     Conditional routing logic to decide the next step in the graph.
     """

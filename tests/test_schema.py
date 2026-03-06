@@ -1,10 +1,7 @@
 from langgraph.graph import StateGraph, START, END
 from shared.state_schema import BerkshireState, merge_signals, read_only_data
 
-# ==========================================
 # UNIT TESTS: Testing the Reducer Rules (Tests 3 & 4)
-# ==========================================
-
 def test_data_protection():
     """
     Test 1: Cannot overwrite raw data with false data
@@ -35,10 +32,7 @@ def test_signal_merging():
     assert "sentiment" in result and "technical" in result, "FAIL: Data was lost!"
     print("Passed: Agent signals merged successfully without deletion.\n")
 
-# ==========================================
 # INTEGRATION TESTS: Testing the Graph Flow (Tests 1 & 2)
-# ==========================================
-
 def test_graph_flow():
     """Tests 3 & 4: Raw data -> state -> agent context -> result"""
     print("Running Tests 3 & 4: Graph Flow and Context...")
