@@ -30,14 +30,15 @@ workflow = StateGraph(BerkshireState)
 workflow.add_node("data_fetcher", data_fetcher)
 # workflow.add_node("technical_node", technical_node)
 workflow.add_node("sentiment_node", sentiment_node)
-# workflow.add_node("fundamental_node", fundamental_node)
+workflow.add_node("fundamental_node", fundamental_node)
 # workflow.add_node("macro_econ_node", macro_econ_node)
 workflow.add_node("orchestrator", orchestrator)
 
-# Iteration 1 edges and simple CLI loop
+# Edges: data_fetcher → sentiment → fundamental → orchestrator
 workflow.add_edge(START, "data_fetcher")
 workflow.add_edge("data_fetcher", "sentiment_node")
-workflow.add_edge("sentiment_node", "orchestrator")
+workflow.add_edge("sentiment_node", "fundamental_node")
+workflow.add_edge("fundamental_node", "orchestrator")
 workflow.add_edge("orchestrator", END)
 
 # Compile the graph here
