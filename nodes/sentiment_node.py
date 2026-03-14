@@ -28,14 +28,17 @@ def sentiment_node(state: BerkshireState):
 
     # --- Edge case: no news available ---
     if not news_articles:
-        print(f"[Sentiment] No news articles found for {ticker}. Defaulting to neutral (5).")
+        print(f"[Sentiment] No news articles found for {ticker}. Defaulting to neutral.")
         return {
             "analyst_signals": {
                 "sentiment": {
-                    "score": 5,
-                    "ticker": ticker,
-                    "reasoning": "No news articles were available to analyze. Defaulting to neutral.",
-                    "article_count": 0,
+                    "signal": "neutral",
+                    "confidence": 0.0,
+                    "features": {
+                        "sentiment_score": 0.0,
+                        "news_volume": 0,
+                    },
+                    "details": "No news articles were available to analyze. Defaulting to neutral.",
                 }
             }
         }
@@ -104,20 +107,39 @@ You MUST respond with ONLY valid JSON in this exact format, no extra text:
         score = 5
         reasoning = f"Error during LLM call: {str(e)}"
 
+    # --- Derive signal, confidence, and features ---
+    if score <= 3:
+        signal = "bearish"
+    elif score >= 7:
+        signal = "bullish"
+    else:
+        signal = "neutral"
+
+    # Confidence: how far the score is from neutral (5), normalized to 0.0-1.0
+    confidence = round(abs(score - 5.5) / 4.5, 2)
+    confidence = min(confidence, 1.0)
+
+    # Normalize score to -1.0 to 1.0 for RF/KNN features
+    sentiment_score_normalized = round((score - 5.5) / 4.5, 2)
+
     # --- Print result for visibility ---
-    label = "BEARISH" if score <= 3 else "BULLISH" if score >= 7 else "NEUTRAL"
-    print(f"\n[Sentiment] {ticker}: {score}/10 ({label})")
+    label = signal.upper()
+    print(f"\n[Sentiment] {ticker}: {label} (confidence: {confidence})")
+    print(f"[Sentiment]   sentiment_score: {sentiment_score_normalized} -> {signal}")
+    print(f"[Sentiment]   news_volume: {len(news_articles)}")
     print(f"[Sentiment] Reasoning: {reasoning}")
-    print(f"[Sentiment] Articles analyzed: {len(news_articles)}")
 
     # --- Write to state ---
     return {
         "analyst_signals": {
             "sentiment": {
-                "score": score,
-                "ticker": ticker,
-                "reasoning": reasoning,
-                "article_count": len(news_articles),
+                "signal": signal,
+                "confidence": confidence,
+                "features": {
+                    "sentiment_score": sentiment_score_normalized,
+                    "news_volume": len(news_articles),
+                },
+                "details": f"sentiment_score={sentiment_score_normalized} ({signal}); articles={len(news_articles)}; {reasoning}",
             }
         }
     }
