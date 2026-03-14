@@ -115,17 +115,14 @@ You MUST respond with ONLY valid JSON in this exact format, no extra text:
     else:
         signal = "neutral"
 
-    # Confidence: how far the score is from neutral (5), normalized to 0.0-1.0
+    # Confidence: how far the score is from neutral (5.5), normalized to 0.0-1.0
     confidence = round(abs(score - 5.5) / 4.5, 2)
     confidence = min(confidence, 1.0)
-
-    # Normalize score to -1.0 to 1.0 for RF/KNN features
-    sentiment_score_normalized = round((score - 5.5) / 4.5, 2)
 
     # --- Print result for visibility ---
     label = signal.upper()
     print(f"\n[Sentiment] {ticker}: {label} (confidence: {confidence})")
-    print(f"[Sentiment]   sentiment_score: {sentiment_score_normalized} -> {signal}")
+    print(f"[Sentiment]   sentiment_score: {score} -> {signal}")
     print(f"[Sentiment]   news_volume: {len(news_articles)}")
     print(f"[Sentiment] Reasoning: {reasoning}")
 
@@ -136,10 +133,10 @@ You MUST respond with ONLY valid JSON in this exact format, no extra text:
                 "signal": signal,
                 "confidence": confidence,
                 "features": {
-                    "sentiment_score": sentiment_score_normalized,
+                    "sentiment_score": score,
                     "news_volume": len(news_articles),
                 },
-                "details": f"sentiment_score={sentiment_score_normalized} ({signal}); articles={len(news_articles)}; {reasoning}",
+                "details": f"sentiment_score={score} ({signal}); articles={len(news_articles)}; {reasoning}",
             }
         }
     }
