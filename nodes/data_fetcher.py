@@ -77,79 +77,92 @@ def data_fetcher(state: BerkshireState):
     """
     ticker_symbol: str = state["ticker"]
     data: dict = {}
-    ticker = yfinance.Ticker(ticker_symbol)
 
-    # Price history
     try:
-        history_df = ticker.history(period="1y").reset_index()
-        price_history_records = []
-        for record in history_df.to_dict(orient="records"):
-            safe_record = {}
-            for k, v in record.items():
-                k = _ts_to_iso(k) if hasattr(k, "isoformat") else str(k)
-                if hasattr(v, "isoformat"):
-                    v = v.isoformat()
-                else:
-                    try:
-                        import numpy as np
-                        if isinstance(v, (np.integer,)):
-                            v = int(v)
-                        elif isinstance(v, (np.floating,)):
-                            v = float(v)
-                    except ImportError:
-                        pass
-                safe_record[k] = v
-            price_history_records.append(safe_record)
-        data["price_history"] = price_history_records
+        ticker = yfinance.Ticker(ticker_symbol)
     except Exception as e:
-        print(f"[Data Fetcher] Error fetching price history: {e}")
-        data["price_history"] = []
+        print(f"[Data Fetcher] yfinance.Ticker() failed: {e}")
+        ticker = None
+        data["yfinance_error"] = str(e)
 
-    # Company info
-    try:
-        data["company_info"] = ticker.info
-    except Exception:
-        # Fails silently for ETFs like SPY, assigning an empty dict
-        data["company_info"] = {}
+    if ticker is not None:
+        # Price history
+        try:
+            history_df = ticker.history(period="1y").reset_index()
+            price_history_records = []
+            for record in history_df.to_dict(orient="records"):
+                safe_record = {}
+                for k, v in record.items():
+                    k = _ts_to_iso(k) if hasattr(k, "isoformat") else str(k)
+                    if hasattr(v, "isoformat"):
+                        v = v.isoformat()
+                    else:
+                        try:
+                            import numpy as np
+                            if isinstance(v, (np.integer,)):
+                                v = int(v)
+                            elif isinstance(v, (np.floating,)):
+                                v = float(v)
+                        except ImportError:
+                            pass
+                    safe_record[k] = v
+                price_history_records.append(safe_record)
+            data["price_history"] = price_history_records
+        except Exception as e:
+            print(f"[Data Fetcher] Error fetching price history: {e}")
+            data["price_history"] = []
 
-    # Income Statement
-    try:
-        financials_df = ticker.financials
-        if financials_df is not None and not financials_df.empty:
-            data["income_statement"] = _stringify_keys(financials_df.to_dict())
-        else:
+        # Company info
+        try:
+            data["company_info"] = ticker.info
+        except Exception:
+            data["company_info"] = {}
+
+        # Income Statement
+        try:
+            financials_df = ticker.financials
+            if financials_df is not None and not financials_df.empty:
+                data["income_statement"] = _stringify_keys(financials_df.to_dict())
+            else:
+                data["income_statement"] = {}
+        except Exception:
             data["income_statement"] = {}
-    except Exception:
-        data["income_statement"] = {}
 
-    # Balance Sheet
-    try:
-        balance_df = ticker.balance_sheet
-        if balance_df is not None and not balance_df.empty:
-            data["balance_sheet"] = _stringify_keys(balance_df.to_dict())
-        else:
+        # Balance Sheet
+        try:
+            balance_df = ticker.balance_sheet
+            if balance_df is not None and not balance_df.empty:
+                data["balance_sheet"] = _stringify_keys(balance_df.to_dict())
+            else:
+                data["balance_sheet"] = {}
+        except Exception:
             data["balance_sheet"] = {}
-    except Exception:
-        data["balance_sheet"] = {}
 
-    # Cash Flow
-    try:
-        cashflow_df = ticker.cashflow
-        if cashflow_df is not None and not cashflow_df.empty:
-            data["cash_flow"] = _stringify_keys(cashflow_df.to_dict())
-        else:
+        # Cash Flow
+        try:
+            cashflow_df = ticker.cashflow
+            if cashflow_df is not None and not cashflow_df.empty:
+                data["cash_flow"] = _stringify_keys(cashflow_df.to_dict())
+            else:
+                data["cash_flow"] = {}
+        except Exception:
             data["cash_flow"] = {}
-    except Exception:
-        data["cash_flow"] = {}
 
-    # Analyst recommendations
-    try:
-        recs = ticker.recommendations
-        if recs is not None and not recs.empty:
-            data["analyst_recommendations"] = recs.reset_index().to_dict(orient="records")
-        else:
+        # Analyst recommendations
+        try:
+            recs = ticker.recommendations
+            if recs is not None and not recs.empty:
+                data["analyst_recommendations"] = recs.reset_index().to_dict(orient="records")
+            else:
+                data["analyst_recommendations"] = []
+        except Exception:
             data["analyst_recommendations"] = []
-    except Exception:
+    else:
+        data["price_history"] = []
+        data["company_info"] = {}
+        data["income_statement"] = {}
+        data["balance_sheet"] = {}
+        data["cash_flow"] = {}
         data["analyst_recommendations"] = []
 
     # Finnhub block  (free-tier endpoints only)
