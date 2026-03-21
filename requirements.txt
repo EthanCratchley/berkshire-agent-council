@@ -6,3 +6,6 @@ fredapi
 finnhub-python
 python-dotenv
 pytest==9.0.2
+scikit-learn
+numpy
+joblib

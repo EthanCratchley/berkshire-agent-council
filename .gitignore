@@ -70,6 +70,10 @@ Thumbs.db
 *.tmp
 *.temp
 
+# ML model items
+*.pkl
+data/cached_dataset.csv
+
 # Type Checkers
 .mypy_cache/
 .dmypy.json
