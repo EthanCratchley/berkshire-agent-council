@@ -1,4 +1,5 @@
 from shared.state_schema import BerkshireState
+from shared.feature_engineering import compute_fundamental_features
 
 
 # Sector-relative scoring thresholds
@@ -58,102 +59,15 @@ DEFAULT_THRESHOLDS = {
 }
 
 
-def _get_most_recent_value(statement: dict, row_key: str):
-    """Extract the most recent column value from a financial statement dict."""
-    row = statement.get(row_key, {})
-    if not row:
-        return None
-    sorted_dates = sorted(row.keys(), reverse=True)
-    for date in sorted_dates:
-        val = row[date]
-        if val is not None:
-            return float(val)
-    return None
-
-
 def _extract_features(data: dict) -> dict:
-    """Extract the 5 fundamental features from state data with fallbacks."""
-    company_info = data.get("company_info", {})
-    basic_financials = data.get("basic_financials", {})
-    income_statement = data.get("income_statement", {})
-    balance_sheet = data.get("balance_sheet", {})
-    earnings_surprises = data.get("earnings_surprises", [])
-
-    metric = basic_financials.get("metric", {}) if isinstance(basic_financials, dict) else {}
-
-    features = {
-        "pe_ratio": None,
-        "debt_to_equity": None,
-        "profit_margin": None,
-        "revenue_growth": None,
-        "eps": None,
-    }
-
-    # P/E ratio
-    try:
-        val = company_info.get("trailingPE")
-        if val is None:
-            val = metric.get("peRatio")
-        if val is not None:
-            features["pe_ratio"] = float(val)
-    except (TypeError, ValueError):
-        pass
-
-    # Debt-to-equity
-    try:
-        val = company_info.get("debtToEquity")
-        if val is not None:
-            features["debt_to_equity"] = float(val)
-        else:
-            total_debt = _get_most_recent_value(balance_sheet, "Total Debt")
-            equity = _get_most_recent_value(balance_sheet, "Stockholders Equity")
-            if total_debt is not None and equity is not None and equity != 0:
-                features["debt_to_equity"] = total_debt / equity
-    except (TypeError, ValueError, ZeroDivisionError):
-        pass
-
-    # Profit margin
-    try:
-        val = company_info.get("profitMargins")
-        if val is not None:
-            features["profit_margin"] = float(val)
-        else:
-            net_income = _get_most_recent_value(income_statement, "Net Income")
-            revenue = _get_most_recent_value(income_statement, "Total Revenue")
-            if net_income is not None and revenue is not None and revenue != 0:
-                features["profit_margin"] = net_income / revenue
-    except (TypeError, ValueError, ZeroDivisionError):
-        pass
-
-    # Revenue growth
-    try:
-        val = company_info.get("revenueGrowth")
-        if val is not None:
-            features["revenue_growth"] = float(val)
-        else:
-            rev_row = income_statement.get("Total Revenue", {})
-            if len(rev_row) >= 2:
-                sorted_dates = sorted(rev_row.keys(), reverse=True)
-                recent = float(rev_row[sorted_dates[0]])
-                prior = float(rev_row[sorted_dates[1]])
-                if prior != 0:
-                    features["revenue_growth"] = (recent - prior) / abs(prior)
-    except (TypeError, ValueError, ZeroDivisionError):
-        pass
-
-    # EPS
-    try:
-        val = company_info.get("trailingEps")
-        if val is not None:
-            features["eps"] = float(val)
-        elif earnings_surprises and isinstance(earnings_surprises, list):
-            actual = earnings_surprises[0].get("actual")
-            if actual is not None:
-                features["eps"] = float(actual)
-    except (TypeError, ValueError, IndexError):
-        pass
-
-    return features
+    """Extract fundamental features using shared feature_engineering module."""
+    return compute_fundamental_features(
+        company_info=data.get("company_info", {}),
+        basic_financials=data.get("basic_financials", {}),
+        income_statement=data.get("income_statement", {}),
+        balance_sheet=data.get("balance_sheet", {}),
+        earnings_surprises=data.get("earnings_surprises", []),
+    )
 
 
 def _score_feature(name: str, value, thresholds: dict) -> int:
