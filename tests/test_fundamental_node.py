@@ -62,6 +62,8 @@ def test_complete_data_bullish():
     sig = result["analyst_signals"]["fundamental"]
 
     assert sig["signal"] == "bullish"
+    assert sig["rating"] == "strong_buy"
+    assert sig["stance_score"] == 2
     assert sig["confidence"] > 0.5
     assert all(v is not None for v in sig["features"].values())
 
@@ -82,6 +84,8 @@ def test_complete_data_bearish():
     sig = result["analyst_signals"]["fundamental"]
 
     assert sig["signal"] == "bearish"
+    assert sig["rating"] == "strong_sell"
+    assert sig["stance_score"] == -2
 
 
 def test_mixed_data_neutral():
@@ -100,6 +104,28 @@ def test_mixed_data_neutral():
     sig = result["analyst_signals"]["fundamental"]
 
     assert sig["signal"] == "neutral"
+    assert sig["rating"] == "hold"
+    assert sig["stance_score"] == 0
+
+
+def test_moderate_bullish_maps_to_buy():
+    """A mild positive score should map to buy (+1), not strong_buy (+2)."""
+    state = _make_state({
+        "company_info": {
+            "trailingPE": 10.0,       # bullish for tech
+            "debtToEquity": 20.0,     # bullish for tech
+            "profitMargins": 0.10,    # neutral for tech
+            "revenueGrowth": 0.05,    # neutral for tech
+            "trailingEps": 1.5,       # neutral for tech
+            "sector": "Technology",
+        }
+    })
+    result = fundamental_node(state)
+    sig = result["analyst_signals"]["fundamental"]
+
+    assert sig["signal"] == "bullish"
+    assert sig["rating"] == "buy"
+    assert sig["stance_score"] == 1
 
 
 def test_missing_company_info_uses_fallback():
@@ -121,6 +147,8 @@ def test_empty_data_returns_neutral():
     sig = result["analyst_signals"]["fundamental"]
 
     assert sig["signal"] == "neutral"
+    assert sig["rating"] == "hold"
+    assert sig["stance_score"] == 0
     assert sig["confidence"] == 0.0
     assert all(v is None for v in sig["features"].values())
 
@@ -191,6 +219,8 @@ def test_output_contract():
     assert "fundamental" in result["analyst_signals"]
 
     sig = result["analyst_signals"]["fundamental"]
+    assert sig["rating"] in ("strong_buy", "buy", "hold", "sell", "strong_sell")
+    assert sig["stance_score"] in (-2, -1, 0, 1, 2)
     assert sig["signal"] in ("bullish", "bearish", "neutral")
     assert 0.0 <= sig["confidence"] <= 1.0
     assert isinstance(sig["features"], dict)
@@ -249,6 +279,8 @@ def test_no_data_key_returns_neutral():
     sig = result["analyst_signals"]["fundamental"]
 
     assert sig["signal"] == "neutral"
+    assert sig["rating"] == "hold"
+    assert sig["stance_score"] == 0
     assert sig["confidence"] == 0.0
 
 

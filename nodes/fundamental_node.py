@@ -59,6 +59,43 @@ DEFAULT_THRESHOLDS = {
 }
 
 
+RATING_TO_STANCE_SCORE = {
+    "strong_buy": 2,
+    "buy": 1,
+    "hold": 0,
+    "sell": -1,
+    "strong_sell": -2,
+}
+
+
+def _rating_from_score_sum(score_sum: int) -> str:
+    """
+    Map aggregate feature score to actionable rating.
+
+    Keeps legacy signal behavior stable:
+    - score_sum in [-1, 1] maps to hold -> neutral
+    - score_sum >= 2 maps to buy/strong_buy -> bullish
+    - score_sum <= -2 maps to sell/strong_sell -> bearish
+    """
+    if score_sum >= 3:
+        return "strong_buy"
+    if score_sum >= 2:
+        return "buy"
+    if score_sum <= -3:
+        return "strong_sell"
+    if score_sum <= -2:
+        return "sell"
+    return "hold"
+
+
+def _signal_from_stance_score(stance_score: int) -> str:
+    if stance_score > 0:
+        return "bullish"
+    if stance_score < 0:
+        return "bearish"
+    return "neutral"
+
+
 def _extract_features(data: dict) -> dict:
     """Extract fundamental features using shared feature_engineering module."""
     return compute_fundamental_features(
@@ -109,6 +146,8 @@ def fundamental_node(state: BerkshireState):
         return {
             "analyst_signals": {
                 "fundamental": {
+                    "rating": "hold",
+                    "stance_score": 0,
                     "signal": "neutral",
                     "confidence": 0.0,
                     "features": {k: None for k in DEFAULT_THRESHOLDS},
@@ -132,13 +171,9 @@ def fundamental_node(state: BerkshireState):
         metrics_with_data = sum(1 for v in features.values() if v is not None)
         score_sum = sum(s for name, s in scores.items() if features[name] is not None)
 
-        # Determine signal
-        if score_sum > 1:
-            signal = "bullish"
-        elif score_sum < -1:
-            signal = "bearish"
-        else:
-            signal = "neutral"
+        rating = _rating_from_score_sum(score_sum)
+        stance_score = RATING_TO_STANCE_SCORE[rating]
+        signal = _signal_from_stance_score(stance_score)
 
         # Calculate confidence
         if metrics_with_data == 0:
@@ -156,11 +191,15 @@ def fundamental_node(state: BerkshireState):
             if value is not None:
                 score_label = {1: "bullish", 0: "neutral", -1: "bearish"}[scores[name]]
                 detail_parts.append(f"{name}={value:.2f} ({score_label})")
+        detail_parts.append(f"rating={rating} (stance_score={stance_score:+d})")
         details = "; ".join(detail_parts) if detail_parts else "No fundamental data available."
 
         # Debug output
         label = signal.upper()
-        print(f"\n[Fundamental] {ticker}: {label} (confidence: {confidence})")
+        print(
+            f"\n[Fundamental] {ticker}: {label} / {rating.upper()} "
+            f"(stance_score={stance_score:+d}, confidence: {confidence})"
+        )
         if sector:
             print(f"[Fundamental] Sector: {sector} (using sector-relative thresholds)")
         for name, value in features.items():
@@ -171,6 +210,8 @@ def fundamental_node(state: BerkshireState):
         return {
             "analyst_signals": {
                 "fundamental": {
+                    "rating": rating,
+                    "stance_score": stance_score,
                     "signal": signal,
                     "confidence": confidence,
                     "features": features,
@@ -184,6 +225,8 @@ def fundamental_node(state: BerkshireState):
         return {
             "analyst_signals": {
                 "fundamental": {
+                    "rating": "hold",
+                    "stance_score": 0,
                     "signal": "neutral",
                     "confidence": 0.0,
                     "features": {k: None for k in DEFAULT_THRESHOLDS},
