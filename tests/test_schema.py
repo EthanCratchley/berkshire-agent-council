@@ -45,14 +45,14 @@ def test_signal_revision_history_preserved():
     """
     existing = {
         "fundamental": {
-            "signal": "bearish",
+            "rating": "sell",
             "confidence": 0.72,
             "details": "Initial stance.",
         }
     }
     incoming = {
         "fundamental": {
-            "signal": "neutral",
+            "rating": "hold",
             "confidence": 0.44,
             "details": "Revised after challenge.",
         }
@@ -61,11 +61,11 @@ def test_signal_revision_history_preserved():
     result = merge_signals(existing, incoming)
     fundamental = result["fundamental"]
 
-    assert fundamental["signal"] == "neutral"
+    assert fundamental["rating"] == "hold"
     assert "revisions" in fundamental
     assert isinstance(fundamental["revisions"], list)
     assert len(fundamental["revisions"]) == 1
-    assert fundamental["revisions"][0]["signal"] == "bearish"
+    assert fundamental["revisions"][0]["rating"] == "sell"
 
 
 def test_debate_merge_appends_and_replaces_lists():
@@ -104,7 +104,15 @@ def test_graph_flow():
             
         # Test 4: Derive result based on that data
         reasoning = f"Saw {raw_data['financials']}, so I am bullish."
-        return {"analyst_signals": {"sentiment": {"score": 9, "reason": reasoning}}}
+        return {
+            "analyst_signals": {
+                "sentiment": {
+                    "rating": "buy",
+                    "confidence": 0.7,
+                    "details": reasoning,
+                }
+            }
+        }
 
     # 2. Build the mini-graph
     workflow = StateGraph(BerkshireState)

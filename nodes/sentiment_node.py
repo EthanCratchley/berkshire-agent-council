@@ -1,10 +1,19 @@
 import os
 import json
 
-from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    def load_dotenv():
+        return False
+
+try:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+except ImportError:
+    ChatGoogleGenerativeAI = None
 
 from shared.state_schema import BerkshireState
+from shared.stance import Rating, sentiment_rating_from_score, rating_to_score, rating_to_signal
 
 load_dotenv()
 
@@ -32,7 +41,7 @@ def sentiment_node(state: BerkshireState):
         return {
             "analyst_signals": {
                 "sentiment": {
-                    "signal": "neutral",
+                    "rating": Rating.HOLD.value,
                     "confidence": 0.0,
                     "features": {
                         "sentiment_score": 0.0,
@@ -77,6 +86,11 @@ You MUST respond with ONLY valid JSON in this exact format, no extra text:
 
     # --- Call Gemini ---
     try:
+        if ChatGoogleGenerativeAI is None:
+            raise RuntimeError(
+                "langchain_google_genai is not installed. Unable to run LLM sentiment analysis."
+            )
+
         llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
             google_api_key=os.getenv("GOOGLE_API_KEY"),
@@ -107,13 +121,10 @@ You MUST respond with ONLY valid JSON in this exact format, no extra text:
         score = 5
         reasoning = f"Error during LLM call: {str(e)}"
 
-    # --- Derive signal, confidence, and features ---
-    if score <= 3:
-        signal = "bearish"
-    elif score >= 7:
-        signal = "bullish"
-    else:
-        signal = "neutral"
+    # --- Derive stance/rating, signal, confidence, and features ---
+    rating = sentiment_rating_from_score(score)
+    stance_score = rating_to_score(rating)
+    signal = rating_to_signal(rating)
 
     # Confidence: how far the score is from neutral (5.5), normalized to 0.0-1.0
     confidence = round(abs(score - 5.5) / 4.5, 2)
@@ -121,7 +132,10 @@ You MUST respond with ONLY valid JSON in this exact format, no extra text:
 
     # --- Print result for visibility ---
     label = signal.upper()
-    print(f"\n[Sentiment] {ticker}: {label} (confidence: {confidence})")
+    print(
+        f"\n[Sentiment] {ticker}: {label} / {rating.upper()} "
+        f"(stance_score={stance_score:+d}, confidence: {confidence})"
+    )
     print(f"[Sentiment]   sentiment_score: {score} -> {signal}")
     print(f"[Sentiment]   news_volume: {len(news_articles)}")
     print(f"[Sentiment] Reasoning: {reasoning}")
@@ -130,13 +144,16 @@ You MUST respond with ONLY valid JSON in this exact format, no extra text:
     return {
         "analyst_signals": {
             "sentiment": {
-                "signal": signal,
+                "rating": rating.value,
                 "confidence": confidence,
                 "features": {
                     "sentiment_score": score,
                     "news_volume": len(news_articles),
                 },
-                "details": f"sentiment_score={score} ({signal}); articles={len(news_articles)}; {reasoning}",
+                "details": (
+                    f"sentiment_score={score} ({signal}); rating={rating.value}; "
+                    f"articles={len(news_articles)}; {reasoning}"
+                ),
             }
         }
     }

@@ -1,111 +1,36 @@
 from itertools import combinations
 from shared.state_schema import BerkshireState, make_initial_debate_state
+from shared.stance import (
+    parse_rating,
+    rating_to_score,
+)
 
 
-SIGNAL_TO_INT = {
-    "bullish": 1,
-    "neutral": 0,
-    "bearish": -1,
-}
 HIGH_CONFIDENCE_THRESHOLD = 0.55
-RATING_TO_SCORE = {
-    "strong_buy": 2,
-    "buy": 1,
-    "hold": 0,
-    "sell": -1,
-    "strong_sell": -2,
-    # Common aliases
-    "outperform": 1,
-    "overweight": 1,
-    "neutral": 0,
-    "market_weight": 0,
-    "underperform": -1,
-    "underweight": -1,
-}
-SCORE_TO_SIGNAL = {
-    1: "bullish",
-    0: "neutral",
-    -1: "bearish",
-}
-SCORE_TO_CANONICAL_RATING = {
-    2: "strong_buy",
-    1: "buy",
-    0: "hold",
-    -1: "sell",
-    -2: "strong_sell",
-}
-
-
-def _normalize_rating(value) -> str:
-    if not isinstance(value, str):
-        return ""
-    return value.strip().lower().replace(" ", "_").replace("-", "_").replace("/", "_")
-
-
-def _coerce_stance_score(value):
-    try:
-        score = int(float(value))
-    except (TypeError, ValueError):
-        return None
-    if score < -2 or score > 2:
-        return None
-    return score
-
-
-def _resolve_stance_score(payload: dict):
-    """
-    Priority:
-      1) stance_score (+2..-2)
-      2) rating string (strong_buy..strong_sell + aliases)
-      3) legacy signal (bullish/neutral/bearish)
-    """
-    score = _coerce_stance_score(payload.get("stance_score"))
-    if score is not None:
-        return score, "stance_score"
-
-    rating_key = _normalize_rating(payload.get("rating"))
-    if rating_key in RATING_TO_SCORE:
-        return RATING_TO_SCORE[rating_key], "rating"
-
-    signal = payload.get("signal")
-    if signal in SIGNAL_TO_INT:
-        return SIGNAL_TO_INT[signal], "signal"
-
-    return None, None
-
-
-def _signal_from_score(score: int) -> str:
-    sign = 1 if score > 0 else (-1 if score < 0 else 0)
-    return SCORE_TO_SIGNAL[sign]
-
-
-def _canonical_rating_from_score(score: int) -> str:
-    return SCORE_TO_CANONICAL_RATING[score]
 
 
 def _extract_signal_snapshot(signals: dict) -> dict:
     """
-    Keep only analyst signals that have valid stance/confidence fields.
+    Keep only analyst signals that have valid rating/confidence fields.
     """
     snapshots = {}
     for analyst, payload in (signals or {}).items():
         if not isinstance(payload, dict):
             continue
-        stance_score, source = _resolve_stance_score(payload)
+        rating = parse_rating(payload.get("rating"))
         confidence = payload.get("confidence")
-        if stance_score is None:
+        if rating is None:
             continue
         try:
             confidence = float(confidence)
         except (TypeError, ValueError):
             continue
+        stance_score = rating_to_score(rating)
         snapshots[analyst] = {
             "stance_score": stance_score,
             "score_sign": 1 if stance_score > 0 else (-1 if stance_score < 0 else 0),
-            "signal": payload.get("signal") or _signal_from_score(stance_score),
-            "rating": _normalize_rating(payload.get("rating")) or _canonical_rating_from_score(stance_score),
+            "rating": rating.value,
             "confidence": max(0.0, min(confidence, 1.0)),
-            "stance_source": source,
             "details": payload.get("details", ""),
         }
     return snapshots

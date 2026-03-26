@@ -1,5 +1,6 @@
 from shared.state_schema import BerkshireState
 from shared.feature_engineering import compute_fundamental_features
+from shared.stance import rating_from_aggregate_score, rating_to_score, rating_to_signal, Rating
 
 
 # Sector-relative scoring thresholds
@@ -58,44 +59,6 @@ DEFAULT_THRESHOLDS = {
     "eps": (0.0, 5.0),
 }
 
-
-RATING_TO_STANCE_SCORE = {
-    "strong_buy": 2,
-    "buy": 1,
-    "hold": 0,
-    "sell": -1,
-    "strong_sell": -2,
-}
-
-
-def _rating_from_score_sum(score_sum: int) -> str:
-    """
-    Map aggregate feature score to actionable rating.
-
-    Keeps legacy signal behavior stable:
-    - score_sum in [-1, 1] maps to hold -> neutral
-    - score_sum >= 2 maps to buy/strong_buy -> bullish
-    - score_sum <= -2 maps to sell/strong_sell -> bearish
-    """
-    if score_sum >= 3:
-        return "strong_buy"
-    if score_sum >= 2:
-        return "buy"
-    if score_sum <= -3:
-        return "strong_sell"
-    if score_sum <= -2:
-        return "sell"
-    return "hold"
-
-
-def _signal_from_stance_score(stance_score: int) -> str:
-    if stance_score > 0:
-        return "bullish"
-    if stance_score < 0:
-        return "bearish"
-    return "neutral"
-
-
 def _extract_features(data: dict) -> dict:
     """Extract fundamental features using shared feature_engineering module."""
     return compute_fundamental_features(
@@ -135,8 +98,9 @@ def fundamental_node(state: BerkshireState):
     Node for fundamental analysis.
 
     Extracts financial ratios from state data, scores them using
-    sector-relative thresholds, and returns a bullish/bearish/neutral
-    signal with numerical features for RF/KNN models.
+    sector-relative thresholds, and returns:
+    - rating (strong_buy/buy/hold/sell/strong_sell)
+    with numerical features for RF/KNN models.
     """
     ticker = state.get("ticker", "UNKNOWN")
     data = state.get("data", {})
@@ -146,9 +110,7 @@ def fundamental_node(state: BerkshireState):
         return {
             "analyst_signals": {
                 "fundamental": {
-                    "rating": "hold",
-                    "stance_score": 0,
-                    "signal": "neutral",
+                    "rating": Rating.HOLD.value,
                     "confidence": 0.0,
                     "features": {k: None for k in DEFAULT_THRESHOLDS},
                     "details": "No data available for fundamental analysis.",
@@ -171,9 +133,9 @@ def fundamental_node(state: BerkshireState):
         metrics_with_data = sum(1 for v in features.values() if v is not None)
         score_sum = sum(s for name, s in scores.items() if features[name] is not None)
 
-        rating = _rating_from_score_sum(score_sum)
-        stance_score = RATING_TO_STANCE_SCORE[rating]
-        signal = _signal_from_stance_score(stance_score)
+        rating = rating_from_aggregate_score(score_sum)
+        stance_score = rating_to_score(rating)
+        signal = rating_to_signal(rating)
 
         # Calculate confidence
         if metrics_with_data == 0:
@@ -191,7 +153,7 @@ def fundamental_node(state: BerkshireState):
             if value is not None:
                 score_label = {1: "bullish", 0: "neutral", -1: "bearish"}[scores[name]]
                 detail_parts.append(f"{name}={value:.2f} ({score_label})")
-        detail_parts.append(f"rating={rating} (stance_score={stance_score:+d})")
+        detail_parts.append(f"rating={rating.value}")
         details = "; ".join(detail_parts) if detail_parts else "No fundamental data available."
 
         # Debug output
@@ -210,9 +172,7 @@ def fundamental_node(state: BerkshireState):
         return {
             "analyst_signals": {
                 "fundamental": {
-                    "rating": rating,
-                    "stance_score": stance_score,
-                    "signal": signal,
+                    "rating": rating.value,
                     "confidence": confidence,
                     "features": features,
                     "details": details,
@@ -225,9 +185,7 @@ def fundamental_node(state: BerkshireState):
         return {
             "analyst_signals": {
                 "fundamental": {
-                    "rating": "hold",
-                    "stance_score": 0,
-                    "signal": "neutral",
+                    "rating": Rating.HOLD.value,
                     "confidence": 0.0,
                     "features": {k: None for k in DEFAULT_THRESHOLDS},
                     "details": f"Error during fundamental analysis: {str(e)}",
