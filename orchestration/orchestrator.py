@@ -1,23 +1,133 @@
-from shared.state_schema import BerkshireState
+from itertools import combinations
+from shared.state_schema import BerkshireState, make_initial_debate_state
+
+
+SIGNAL_TO_INT = {
+    "bullish": 1,
+    "neutral": 0,
+    "bearish": -1,
+}
+HIGH_CONFIDENCE_THRESHOLD = 0.55
+
+
+def _extract_signal_snapshot(signals: dict) -> dict:
+    """
+    Keep only analyst signals that have valid signal/confidence fields.
+    """
+    snapshots = {}
+    for analyst, payload in (signals or {}).items():
+        if not isinstance(payload, dict):
+            continue
+        signal = payload.get("signal")
+        confidence = payload.get("confidence")
+        if signal not in SIGNAL_TO_INT:
+            continue
+        try:
+            confidence = float(confidence)
+        except (TypeError, ValueError):
+            continue
+        snapshots[analyst] = {
+            "signal": signal,
+            "signal_int": SIGNAL_TO_INT[signal],
+            "confidence": max(0.0, min(confidence, 1.0)),
+            "details": payload.get("details", ""),
+        }
+    return snapshots
+
+
+def _find_contradictions(signal_snapshots: dict) -> list:
+    """
+    Build ranked contradiction payloads for high-confidence opposite stances.
+    """
+    contradictions = []
+    analyst_names = sorted(signal_snapshots.keys())
+
+    for a_name, b_name in combinations(analyst_names, 2):
+        a = signal_snapshots[a_name]
+        b = signal_snapshots[b_name]
+
+        # Opposite only (bullish vs bearish), not neutral involvement.
+        if a["signal_int"] * b["signal_int"] != -1:
+            continue
+
+        # Ignore weak disagreements.
+        if a["confidence"] < HIGH_CONFIDENCE_THRESHOLD or b["confidence"] < HIGH_CONFIDENCE_THRESHOLD:
+            continue
+
+        # Challenge the weaker-confidence side first.
+        if a["confidence"] <= b["confidence"]:
+            target, opponent = a_name, b_name
+        else:
+            target, opponent = b_name, a_name
+
+        severity = round(min(a["confidence"], b["confidence"]), 2)
+        contradiction = {
+            "id": f"{a_name}_vs_{b_name}",
+            "pair": [a_name, b_name],
+            "severity": severity,
+            "target": target,
+            "opponent": opponent,
+            "reason": (
+                f"{a_name}={a['signal']}({a['confidence']:.2f}) conflicts with "
+                f"{b_name}={b['signal']}({b['confidence']:.2f})."
+            ),
+            "action": "revise_or_defend",
+        }
+        contradictions.append(contradiction)
+
+    contradictions.sort(key=lambda item: (-item["severity"], item["id"]))
+    return contradictions
 
 def orchestrator(state: BerkshireState):
     """
-    Conditional routing logic to decide the next step in the graph.
+    Orchestrator pass:
+    - scans analyst outputs
+    - detects contradictions
+    - publishes ranked debate queue metadata
+
+    Routing is still handled externally (no conditional loop in this step).
     """
-    # For now just implementing a simple output formatter for this node just for ITERATION 1
-    print("\n---ORCHESTRATOR REVIEW ---")
-        
-    # Safely get the signals dictionary
+    ticker = state.get("ticker", "UNKNOWN")
     signals = state.get("analyst_signals", {})
-        
-    # For Iteration 1, we just print exactly what the Sentiment Agent wrote
-    if "sentiment" in signals:
-        sentiment_data = signals["sentiment"]
-        print(f"Sentiment Agent Output: {sentiment_data}")
+    debate = state.get("debate") or make_initial_debate_state()
+
+    signal_snapshots = _extract_signal_snapshot(signals)
+    contradictions = _find_contradictions(signal_snapshots)
+
+    if contradictions:
+        status = "debating"
+        active_challenge = contradictions[0]
     else:
-        print("Warning: No sentiment data found on the canvas.")
-            
+        status = "resolved" if signal_snapshots else "idle"
+        active_challenge = None
+
+    history_entry = {
+        "event": "orchestrator_scan",
+        "ticker": ticker,
+        "round": debate.get("round", 0),
+        "analyst_count": len(signal_snapshots),
+        "contradictions_found": len(contradictions),
+        "status": status,
+    }
+
+    print("\n---ORCHESTRATOR REVIEW ---")
+    print(f"Ticker: {ticker}")
+    print(f"Analysts with valid stances: {len(signal_snapshots)}")
+    print(f"Contradictions found: {len(contradictions)}")
+    if active_challenge:
+        print(
+            f"Top challenge: {active_challenge['id']} "
+            f"(target={active_challenge['target']}, severity={active_challenge['severity']})"
+        )
     print("------------------------------\n")
-        
-    # Returning an empty dict means "I am not updating the state, just passing it along"
-    return {}
+
+    return {
+        "debate": {
+            "_replace_lists": ["queue", "unresolved_contradictions"],
+            "queue": contradictions,
+            "unresolved_contradictions": contradictions,
+            "active_challenge": active_challenge,
+            "status": status,
+            "history": [history_entry],
+        }
+    }
