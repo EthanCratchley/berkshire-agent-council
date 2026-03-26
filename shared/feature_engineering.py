@@ -144,7 +144,11 @@ def compute_fundamental_features(
     Uses multiple fallback sources for each metric. Returns None for any
     metric that cannot be determined.
     """
-    metric = basic_financials.get("metric", {}) if isinstance(basic_financials, dict) else {}
+    if isinstance(basic_financials, dict):
+        nested = basic_financials.get("metric")
+        metric = nested if isinstance(nested, dict) else basic_financials
+    else:
+        metric = {}
 
     features = {
         "pe_ratio": None,
