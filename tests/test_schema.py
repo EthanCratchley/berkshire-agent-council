@@ -1,5 +1,11 @@
 from langgraph.graph import StateGraph, START, END
-from shared.state_schema import BerkshireState, merge_signals, read_only_data
+from shared.state_schema import (
+    BerkshireState,
+    merge_signals,
+    read_only_data,
+    merge_debate,
+    make_initial_debate_state,
+)
 
 # UNIT TESTS: Testing the Reducer Rules (Tests 3 & 4)
 def test_data_protection():
@@ -31,6 +37,54 @@ def test_signal_merging():
     
     assert "sentiment" in result and "technical" in result, "FAIL: Data was lost!"
     print("Passed: Agent signals merged successfully without deletion.\n")
+
+
+def test_signal_revision_history_preserved():
+    """
+    Re-engaging the same analyst should preserve prior versions under "revisions".
+    """
+    existing = {
+        "fundamental": {
+            "signal": "bearish",
+            "confidence": 0.72,
+            "details": "Initial stance.",
+        }
+    }
+    incoming = {
+        "fundamental": {
+            "signal": "neutral",
+            "confidence": 0.44,
+            "details": "Revised after challenge.",
+        }
+    }
+
+    result = merge_signals(existing, incoming)
+    fundamental = result["fundamental"]
+
+    assert fundamental["signal"] == "neutral"
+    assert "revisions" in fundamental
+    assert isinstance(fundamental["revisions"], list)
+    assert len(fundamental["revisions"]) == 1
+    assert fundamental["revisions"][0]["signal"] == "bearish"
+
+
+def test_debate_merge_appends_and_replaces_lists():
+    """
+    Debate reducer should append lists by default and support explicit replacement.
+    """
+    existing = make_initial_debate_state(max_rounds=3)
+    existing["queue"] = [{"id": "c1"}]
+    existing["history"] = [{"event": "r1"}]
+
+    appended = merge_debate(existing, {"queue": [{"id": "c2"}], "round": 1})
+    assert appended["round"] == 1
+    assert [item["id"] for item in appended["queue"]] == ["c1", "c2"]
+
+    replaced = merge_debate(
+        appended,
+        {"queue": [{"id": "c3"}], "_replace_lists": ["queue"]},
+    )
+    assert [item["id"] for item in replaced["queue"]] == ["c3"]
 
 # INTEGRATION TESTS: Testing the Graph Flow (Tests 1 & 2)
 def test_graph_flow():
