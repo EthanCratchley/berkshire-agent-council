@@ -1,5 +1,5 @@
 from langgraph.graph import StateGraph
-from shared.state_schema import BerkshireState
+from shared.state_schema import BerkshireState, make_initial_debate_state
 from nodes.data_fetcher import data_fetcher
 from nodes.technical_node import technical_node
 from nodes.sentiment_node import sentiment_node
@@ -71,7 +71,9 @@ if __name__ == "__main__":
         initial_state = {
             "ticker": user_input, # Pass the ticker the user chooses in the state
             "data": {},
-            "analyst_signals": {}
+            "analyst_signals": {},
+            "debate": make_initial_debate_state(max_rounds=3),
+            "final_report": {},
         }
         
         print(f"\nDispatching agents for {user_input}...")
