@@ -73,3 +73,37 @@ def test_multiple_contradictions_sorted_by_severity():
     severities = [c["severity"] for c in queue]
     assert severities == sorted(severities, reverse=True)
     assert queue[0]["id"] == "fundamental_vs_sentiment"
+
+
+def test_rating_only_payloads_are_supported():
+    state = _state_with_signals({
+        "sentiment": {"rating": "strong_buy", "confidence": 0.90, "details": ""},
+        "fundamental": {"rating": "sell", "confidence": 0.80, "details": ""},
+    })
+
+    result = orchestrator(state)
+    challenge = result["debate"]["active_challenge"]
+
+    assert result["debate"]["status"] == "debating"
+    assert challenge["score_distance"] == 3
+    assert challenge["severity"] == 2.4  # 3 * min(0.90, 0.80)
+
+
+def test_stance_score_takes_precedence_over_rating_and_signal():
+    state = _state_with_signals({
+        "sentiment": {
+            "stance_score": 2,
+            "rating": "hold",
+            "signal": "neutral",
+            "confidence": 0.90,
+            "details": "",
+        },
+        "fundamental": {"stance_score": -2, "confidence": 0.80, "details": ""},
+    })
+
+    result = orchestrator(state)
+    challenge = result["debate"]["active_challenge"]
+
+    assert result["debate"]["status"] == "debating"
+    assert challenge["score_distance"] == 4
+    assert challenge["severity"] == 3.2  # 4 * min(0.90, 0.80)

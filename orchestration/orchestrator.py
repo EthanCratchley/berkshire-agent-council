@@ -8,28 +8,104 @@ SIGNAL_TO_INT = {
     "bearish": -1,
 }
 HIGH_CONFIDENCE_THRESHOLD = 0.55
+RATING_TO_SCORE = {
+    "strong_buy": 2,
+    "buy": 1,
+    "hold": 0,
+    "sell": -1,
+    "strong_sell": -2,
+    # Common aliases
+    "outperform": 1,
+    "overweight": 1,
+    "neutral": 0,
+    "market_weight": 0,
+    "underperform": -1,
+    "underweight": -1,
+}
+SCORE_TO_SIGNAL = {
+    1: "bullish",
+    0: "neutral",
+    -1: "bearish",
+}
+SCORE_TO_CANONICAL_RATING = {
+    2: "strong_buy",
+    1: "buy",
+    0: "hold",
+    -1: "sell",
+    -2: "strong_sell",
+}
+
+
+def _normalize_rating(value) -> str:
+    if not isinstance(value, str):
+        return ""
+    return value.strip().lower().replace(" ", "_").replace("-", "_").replace("/", "_")
+
+
+def _coerce_stance_score(value):
+    try:
+        score = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    if score < -2 or score > 2:
+        return None
+    return score
+
+
+def _resolve_stance_score(payload: dict):
+    """
+    Priority:
+      1) stance_score (+2..-2)
+      2) rating string (strong_buy..strong_sell + aliases)
+      3) legacy signal (bullish/neutral/bearish)
+    """
+    score = _coerce_stance_score(payload.get("stance_score"))
+    if score is not None:
+        return score, "stance_score"
+
+    rating_key = _normalize_rating(payload.get("rating"))
+    if rating_key in RATING_TO_SCORE:
+        return RATING_TO_SCORE[rating_key], "rating"
+
+    signal = payload.get("signal")
+    if signal in SIGNAL_TO_INT:
+        return SIGNAL_TO_INT[signal], "signal"
+
+    return None, None
+
+
+def _signal_from_score(score: int) -> str:
+    sign = 1 if score > 0 else (-1 if score < 0 else 0)
+    return SCORE_TO_SIGNAL[sign]
+
+
+def _canonical_rating_from_score(score: int) -> str:
+    return SCORE_TO_CANONICAL_RATING[score]
 
 
 def _extract_signal_snapshot(signals: dict) -> dict:
     """
-    Keep only analyst signals that have valid signal/confidence fields.
+    Keep only analyst signals that have valid stance/confidence fields.
     """
     snapshots = {}
     for analyst, payload in (signals or {}).items():
         if not isinstance(payload, dict):
             continue
-        signal = payload.get("signal")
+        stance_score, source = _resolve_stance_score(payload)
         confidence = payload.get("confidence")
-        if signal not in SIGNAL_TO_INT:
+        if stance_score is None:
             continue
         try:
             confidence = float(confidence)
         except (TypeError, ValueError):
             continue
         snapshots[analyst] = {
-            "signal": signal,
-            "signal_int": SIGNAL_TO_INT[signal],
+            "stance_score": stance_score,
+            "score_sign": 1 if stance_score > 0 else (-1 if stance_score < 0 else 0),
+            "signal": payload.get("signal") or _signal_from_score(stance_score),
+            "rating": _normalize_rating(payload.get("rating")) or _canonical_rating_from_score(stance_score),
             "confidence": max(0.0, min(confidence, 1.0)),
+            "stance_source": source,
             "details": payload.get("details", ""),
         }
     return snapshots
@@ -46,8 +122,8 @@ def _find_contradictions(signal_snapshots: dict) -> list:
         a = signal_snapshots[a_name]
         b = signal_snapshots[b_name]
 
-        # Opposite only (bullish vs bearish), not neutral involvement.
-        if a["signal_int"] * b["signal_int"] != -1:
+        # Opposite signs only; skip neutral-involved pairs.
+        if a["score_sign"] * b["score_sign"] != -1:
             continue
 
         # Ignore weak disagreements.
@@ -60,16 +136,18 @@ def _find_contradictions(signal_snapshots: dict) -> list:
         else:
             target, opponent = b_name, a_name
 
-        severity = round(min(a["confidence"], b["confidence"]), 2)
+        score_distance = abs(a["stance_score"] - b["stance_score"])
+        severity = round(score_distance * min(a["confidence"], b["confidence"]), 2)
         contradiction = {
             "id": f"{a_name}_vs_{b_name}",
             "pair": [a_name, b_name],
             "severity": severity,
+            "score_distance": score_distance,
             "target": target,
             "opponent": opponent,
             "reason": (
-                f"{a_name}={a['signal']}({a['confidence']:.2f}) conflicts with "
-                f"{b_name}={b['signal']}({b['confidence']:.2f})."
+                f"{a_name}={a['rating']}({a['stance_score']:+d}, conf={a['confidence']:.2f}) conflicts with "
+                f"{b_name}={b['rating']}({b['stance_score']:+d}, conf={b['confidence']:.2f})."
             ),
             "action": "revise_or_defend",
         }
