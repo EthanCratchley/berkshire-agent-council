@@ -1,4 +1,5 @@
 from shared.state_schema import BerkshireState
+from shared.horizon import normalize_horizon, horizon_label
 from shared.feature_engineering import compute_fundamental_features
 from shared.stance import rating_from_aggregate_score, rating_to_score, rating_to_signal, Rating
 
@@ -103,6 +104,7 @@ def fundamental_node(state: BerkshireState):
     with numerical features for RF/KNN models.
     """
     ticker = state.get("ticker", "UNKNOWN")
+    selected_horizon = normalize_horizon(state.get("horizon", "swing"))
     data = state.get("data", {})
 
     if not data:
@@ -114,6 +116,9 @@ def fundamental_node(state: BerkshireState):
                     "confidence": 0.0,
                     "features": {k: None for k in DEFAULT_THRESHOLDS},
                     "details": "No data available for fundamental analysis.",
+                    "horizon_alignment_note": (
+                        f"Fundamental analysis unavailable for {horizon_label(selected_horizon)}."
+                    ),
                 }
             }
         }
@@ -154,6 +159,7 @@ def fundamental_node(state: BerkshireState):
                 score_label = {1: "bullish", 0: "neutral", -1: "bearish"}[scores[name]]
                 detail_parts.append(f"{name}={value:.2f} ({score_label})")
         detail_parts.append(f"rating={rating.value}")
+        detail_parts.append(f"horizon={selected_horizon}")
         details = "; ".join(detail_parts) if detail_parts else "No fundamental data available."
 
         # Debug output
@@ -176,6 +182,9 @@ def fundamental_node(state: BerkshireState):
                     "confidence": confidence,
                     "features": features,
                     "details": details,
+                    "horizon_alignment_note": (
+                        f"Fundamentals are interpreted for {horizon_label(selected_horizon)}."
+                    ),
                 }
             }
         }
@@ -189,6 +198,9 @@ def fundamental_node(state: BerkshireState):
                     "confidence": 0.0,
                     "features": {k: None for k in DEFAULT_THRESHOLDS},
                     "details": f"Error during fundamental analysis: {str(e)}",
+                    "horizon_alignment_note": (
+                        f"Fundamental analysis failed for {horizon_label(selected_horizon)}."
+                    ),
                 }
             }
         }

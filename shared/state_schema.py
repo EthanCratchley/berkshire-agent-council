@@ -155,6 +155,8 @@ class BerkshireState(TypedDict):
     """
     # Python type hinting syntax just tells python that a berkshire state object will have an object ticker that holds a string
     ticker: str
+    horizon: str
+    horizon_days: Dict[str, int]
     data: Annotated[Dict[str, Any], read_only_data] # The raw data now has read only rule
     analyst_signals: Annotated[Dict[str, Any], merge_signals] # Merge rule to eliminate overwriting
     debate: Annotated[Dict[str, Any], merge_debate]

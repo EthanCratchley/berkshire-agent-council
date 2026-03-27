@@ -4,6 +4,7 @@ from nodes.synthesizer_node import synthesizer_node
 def test_synthesizer_returns_final_report_shape():
     state = {
         "ticker": "AAPL",
+        "horizon": "long",
         "data": {},
         "analyst_signals": {
             "sentiment": {"rating": "buy", "confidence": 0.8, "details": ""},
@@ -31,6 +32,7 @@ def test_synthesizer_returns_final_report_shape():
     result = synthesizer_node(state)
     report = result["final_report"]
     assert report["ticker"] == "AAPL"
+    assert report["horizon"] == "long"
     assert report["recommendation"] in ("strong_buy", "buy", "hold", "sell", "strong_sell")
     assert "weighted_score" in report
     assert isinstance(report["analyst_breakdown"], list)

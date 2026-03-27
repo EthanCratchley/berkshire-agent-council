@@ -13,6 +13,7 @@ except ImportError:
     ChatGoogleGenerativeAI = None
 
 from shared.state_schema import BerkshireState
+from shared.horizon import normalize_horizon, horizon_label
 from shared.stance import Rating, parse_rating, sentiment_rating_from_score, rating_to_score, rating_to_signal
 
 load_dotenv()
@@ -39,6 +40,8 @@ def _valid_contract(payload: dict) -> bool:
         "claims_conceded",
         "claims_disputed",
         "weighting_statement",
+        "horizon_alignment_note",
+        "dialogue_response",
         "final_position",
     )
     if any(key not in payload for key in required):
@@ -56,6 +59,10 @@ def _valid_contract(payload: dict) -> bool:
     if not _is_string_list(payload.get("claims_disputed")):
         return False
     if not isinstance(payload.get("weighting_statement"), str):
+        return False
+    if not isinstance(payload.get("horizon_alignment_note"), str):
+        return False
+    if not isinstance(payload.get("dialogue_response"), str):
         return False
     final_position = payload.get("final_position")
     if not isinstance(final_position, dict):
@@ -83,6 +90,7 @@ def sentiment_node(state: BerkshireState):
         7-10 = Bullish  (positive news dominates)
     """
     ticker = state.get("ticker", "UNKNOWN")
+    selected_horizon = normalize_horizon(state.get("horizon", "swing"))
     data = state.get("data", {})
     news_articles = data.get("news_articles", [])
     debate = state.get("debate", {})
@@ -112,6 +120,7 @@ def sentiment_node(state: BerkshireState):
             )
         challenge_context = (
             f"\nDEBATE CONTEXT:\n"
+            f"- Selected horizon: {horizon_label(selected_horizon)}\n"
             f"- Challenge ID: {active_challenge.get('id', '')}\n"
             f"- You are asked to: {active_challenge.get('action', 'revise_or_defend')}\n"
             f"- Primary disagreement: {active_challenge.get('reason', '')}\n"
@@ -149,6 +158,9 @@ def sentiment_node(state: BerkshireState):
                         "confidence": 0.0,
                     },
                     "weighting_statement": "No evidence available.",
+                    "horizon_alignment_note": (
+                        f"No sentiment evidence available for {horizon_label(selected_horizon)}."
+                    ),
                 }
             }
         }
@@ -171,6 +183,8 @@ def sentiment_node(state: BerkshireState):
     # --- Prompt for Gemini ---
     prompt = f"""You are a stock market sentiment analyst. Analyze the following news headlines
 and summaries for the stock ticker {ticker}.
+Selected horizon: {horizon_label(selected_horizon)}.
+Prioritize sentiment evidence relevance to this horizon.
 
 Based on the overall tone and content of the news, provide a sentiment score
 from 1 to 10 where:
@@ -183,12 +197,14 @@ NEWS ARTICLES:
 {challenge_context}
 
 You MUST respond with ONLY valid JSON in this exact format, no extra text:
-{{"score": <integer 1-10>, "reasoning": "<brief 1-2 sentence explanation>", "claims_conceded": ["<opponent claim accepted>"], "claims_disputed": ["<opponent claim disputed>"], "weighting_statement": "<what factor mattered more and why>", "final_position": {{"rating":"<strong_buy|buy|hold|sell|strong_sell>", "confidence": <0.0-1.0>}}}}
+{{"score": <integer 1-10>, "reasoning": "<brief 1-2 sentence explanation>", "claims_conceded": ["<opponent claim accepted>"], "claims_disputed": ["<opponent claim disputed>"], "weighting_statement": "<what factor mattered more and why>", "horizon_alignment_note": "<why this sentiment view matches the selected horizon>", "dialogue_response": "<1-2 natural-language sentences responding directly to opponent>", "final_position": {{"rating":"<strong_buy|buy|hold|sell|strong_sell>", "confidence": <0.0-1.0>}}}}
 """
 
     claims_conceded = []
     claims_disputed = []
     weighting_statement = ""
+    horizon_alignment_note = ""
+    dialogue_response = ""
 
     # --- Call Gemini ---
     try:
@@ -209,7 +225,8 @@ You MUST respond with ONLY valid JSON in this exact format, no extra text:
             repair_prompt = (
                 "Return ONLY valid JSON for this schema:\n"
                 '{"score":5,"reasoning":"...","claims_conceded":["..."],"claims_disputed":["..."],'
-                '"weighting_statement":"...","final_position":{"rating":"strong_buy|buy|hold|sell|strong_sell","confidence":0.0}}\n'
+                '"weighting_statement":"...","horizon_alignment_note":"...","dialogue_response":"...",'
+                '"final_position":{"rating":"strong_buy|buy|hold|sell|strong_sell","confidence":0.0}}\n'
                 f"Original response:\n{raw_text}"
             )
             repair = llm.invoke(repair_prompt)
@@ -224,6 +241,8 @@ You MUST respond with ONLY valid JSON in this exact format, no extra text:
         claims_conceded = result.get("claims_conceded", [])
         claims_disputed = result.get("claims_disputed", [])
         weighting_statement = str(result.get("weighting_statement", "")).strip()
+        horizon_alignment_note = str(result.get("horizon_alignment_note", "")).strip()
+        dialogue_response = str(result.get("dialogue_response", "")).strip()
 
         # Clamp score to valid range
         score = max(1, min(10, score))
@@ -235,6 +254,8 @@ You MUST respond with ONLY valid JSON in this exact format, no extra text:
         claims_conceded = []
         claims_disputed = []
         weighting_statement = ""
+        horizon_alignment_note = ""
+        dialogue_response = ""
 
     except Exception as e:
         print(f"[Sentiment] Error calling Gemini: {e}")
@@ -243,6 +264,8 @@ You MUST respond with ONLY valid JSON in this exact format, no extra text:
         claims_conceded = []
         claims_disputed = []
         weighting_statement = ""
+        horizon_alignment_note = ""
+        dialogue_response = ""
 
     # --- Derive stance/rating, signal, confidence, and features ---
     rating = sentiment_rating_from_score(score)
@@ -253,10 +276,9 @@ You MUST respond with ONLY valid JSON in this exact format, no extra text:
     # Confidence: how far the score is from neutral (5.5), normalized to 0.0-1.0
     confidence = round(abs(score - 5.5) / 4.5, 2)
     confidence = min(confidence, 1.0)
-    debate_response = (
-        f"I concede: {', '.join(claims_conceded) if claims_conceded else 'none'}. "
-        f"I dispute: {', '.join(claims_disputed) if claims_disputed else 'none'}. "
-        f"Weighting: {weighting_statement or 'recent sentiment evidence dominates.'}"
+    debate_response = dialogue_response or (
+        f"I still favor the {signal} case for {horizon_label(selected_horizon)} "
+        f"because sentiment evidence is stronger than the opposing thesis."
     )
 
     # --- Print result for visibility ---
@@ -281,7 +303,7 @@ You MUST respond with ONLY valid JSON in this exact format, no extra text:
                 },
                 "details": (
                     f"sentiment_score={score} ({signal}); rating={rating.value}; "
-                    f"articles={len(news_articles)}; {reasoning}"
+                    f"articles={len(news_articles)}; horizon={selected_horizon}; {reasoning}"
                 ),
                 "debate_response": (
                     debate_response
@@ -297,6 +319,11 @@ You MUST respond with ONLY valid JSON in this exact format, no extra text:
                     "confidence": confidence,
                 },
                 "weighting_statement": weighting_statement if is_debate_turn else "",
+                "horizon_alignment_note": (
+                    horizon_alignment_note
+                    if horizon_alignment_note
+                    else f"Sentiment stance prioritized for {horizon_label(selected_horizon)}."
+                ),
             }
         }
     }

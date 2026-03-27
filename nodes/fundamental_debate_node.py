@@ -13,6 +13,7 @@ except ImportError:
     ChatGoogleGenerativeAI = None
 
 from shared.state_schema import BerkshireState
+from shared.horizon import normalize_horizon, horizon_label
 from shared.stance import Rating, parse_rating
 
 load_dotenv()
@@ -56,7 +57,15 @@ def _is_string_list(value) -> bool:
 def _valid_contract(payload: dict) -> bool:
     if not isinstance(payload, dict):
         return False
-    required = ("explanation", "claims_conceded", "claims_disputed", "weighting_statement", "final_position")
+    required = (
+        "explanation",
+        "claims_conceded",
+        "claims_disputed",
+        "weighting_statement",
+        "horizon_alignment_note",
+        "dialogue_response",
+        "final_position",
+    )
     if any(key not in payload for key in required):
         return False
     if not isinstance(payload.get("explanation"), str):
@@ -66,6 +75,10 @@ def _valid_contract(payload: dict) -> bool:
     if not _is_string_list(payload.get("claims_disputed")):
         return False
     if not isinstance(payload.get("weighting_statement"), str):
+        return False
+    if not isinstance(payload.get("horizon_alignment_note"), str):
+        return False
+    if not isinstance(payload.get("dialogue_response"), str):
         return False
     final_position = payload.get("final_position")
     if not isinstance(final_position, dict):
@@ -98,6 +111,7 @@ def fundamental_debate_node(state: BerkshireState):
     a valid revised rating from the allowed enum set.
     """
     ticker = state.get("ticker", "UNKNOWN")
+    selected_horizon = normalize_horizon(state.get("horizon", "swing"))
     signals = state.get("analyst_signals", {})
     debate = state.get("debate", {})
     active = debate.get("active_challenge", {}) if isinstance(debate.get("active_challenge"), dict) else {}
@@ -117,13 +131,17 @@ def fundamental_debate_node(state: BerkshireState):
     claims_conceded = []
     claims_disputed = []
     weighting_statement = ""
+    horizon_alignment_note = f"Fundamental view aligned to {horizon_label(selected_horizon)}."
+    dialogue_response = ""
 
     # Only include challenge context if this call is for a debate turn.
     challenge_context = ""
+    opponent_analyst = "unknown"
     if awaiting == "fundamental" and active:
         coalition = active.get("coalition", {})
         my_case = active.get("my_case", {})
         opponent_case = active.get("opponent_case", {})
+        opponent_analyst = str(opponent_case.get("analyst", "unknown"))
         opponent_supporters = coalition.get("supporters_of_opponent", [])
         partial_supporters = coalition.get("partial", [])
         supporter_lines = []
@@ -138,11 +156,13 @@ def fundamental_debate_node(state: BerkshireState):
             )
         challenge_context = (
             f"\nDEBATE CONTEXT:\n"
+            f"- Selected horizon: {horizon_label(selected_horizon)}\n"
             f"- Challenge ID: {active.get('id', '')}\n"
             f"- Action requested: {active.get('action', 'revise_or_defend')}\n"
             f"- Contradiction reason: {active.get('reason', '')}\n"
             f"- Your current case: rating={my_case.get('rating', '')}, confidence={my_case.get('confidence', '')}, details={my_case.get('details', '')}\n"
             f"- Opponent case: rating={opponent_case.get('rating', '')}, confidence={opponent_case.get('confidence', '')}, details={opponent_case.get('details', '')}\n"
+            f"- Opponent analyst type: {opponent_analyst}\n"
             f"- Opponent last rebuttal: {opponent_case.get('last_debate_response', '')}\n"
             f"- Opponent supporters: {len(coalition.get('supporters_of_opponent', []))}\n"
             f"- Partial-agreement analysts: {len(coalition.get('partial', []))}\n"
@@ -152,6 +172,7 @@ def fundamental_debate_node(state: BerkshireState):
 
     prompt = f"""You are a fundamental equity analyst.
 Ticker: {ticker}
+Selected horizon: {horizon_label(selected_horizon)}
 Current rating: {current_rating.value}
 Current confidence: {current_confidence}
 Current details: {current_details}
@@ -161,10 +182,12 @@ Features: {features}
 Task:
 1) Explain in plain English what the fundamental metrics imply.
 2) Explicitly address the opponent claims and rebut or concede.
-3) Do not invent facts beyond provided features/context.
+3) Keep your reasoning grounded in fundamental evidence for the selected horizon.
+4) Do not invent facts beyond provided features/context.
+5) IMPORTANT: the opponent is {opponent_analyst}. Do not describe the opponent argument as "fundamental".
 
 Return ONLY valid JSON:
-{{"explanation":"<3-6 concise sentences>", "claims_conceded":["<opponent claim accepted>"], "claims_disputed":["<opponent claim disputed>"], "weighting_statement":"<which factor dominated and why>", "final_position":{{"rating":"<strong_buy|buy|hold|sell|strong_sell>", "confidence":<0.0-1.0>}}}}
+{{"explanation":"<3-6 concise sentences>", "claims_conceded":["<opponent claim accepted>"], "claims_disputed":["<opponent claim disputed>"], "weighting_statement":"<which factor dominated and why>", "horizon_alignment_note":"<why this fundamental stance fits selected horizon>", "dialogue_response":"<1-2 natural-language sentences responding directly to opponent>", "final_position":{{"rating":"<strong_buy|buy|hold|sell|strong_sell>", "confidence":<0.0-1.0>}}}}
 """
 
     try:
@@ -181,7 +204,8 @@ Return ONLY valid JSON:
                 repair_prompt = (
                     "Return ONLY valid JSON for this schema:\n"
                     '{"explanation":"...", "claims_conceded":["..."], "claims_disputed":["..."], '
-                    '"weighting_statement":"...", "final_position":{"rating":"strong_buy|buy|hold|sell|strong_sell","confidence":0.0}}\n'
+                    '"weighting_statement":"...", "horizon_alignment_note":"...", "dialogue_response":"...", '
+                    '"final_position":{"rating":"strong_buy|buy|hold|sell|strong_sell","confidence":0.0}}\n'
                     f"Original response:\n{raw}"
                 )
                 repair = llm.invoke(repair_prompt)
@@ -193,21 +217,30 @@ Return ONLY valid JSON:
                 claims_conceded = parsed.get("claims_conceded", [])
                 claims_disputed = parsed.get("claims_disputed", [])
                 weighting_statement = str(parsed.get("weighting_statement", "")).strip()
+                horizon_alignment_note = str(parsed.get("horizon_alignment_note", "")).strip()
+                dialogue_response = str(parsed.get("dialogue_response", "")).strip()
                 final_position = parsed.get("final_position", {})
                 llm_rating = parse_rating(final_position.get("rating"))
                 if llm_rating is not None:
                     revised_rating = _bounded_rating_update(current_rating, llm_rating, max_step=1)
                 parsed_conf = max(0.0, min(float(final_position.get("confidence", current_confidence)), 1.0))
                 revised_confidence = round((float(current_confidence) + parsed_conf) / 2.0, 2)
-                debate_response = (
-                    f"I concede: {', '.join(claims_conceded) if claims_conceded else 'none'}. "
-                    f"I dispute: {', '.join(claims_disputed) if claims_disputed else 'none'}. "
-                    f"Weighting: {weighting_statement or 'fundamental metrics remain primary.'}"
+                debate_response = dialogue_response or (
+                    f"I maintain the fundamental stance for {horizon_label(selected_horizon)} "
+                    f"because the core financial metrics still support it."
                 )
     except Exception as e:
         explanation = f"{explanation} LLM refinement unavailable: {str(e)}"
         debate_response = f"LLM unavailable; maintaining quant stance. ({str(e)})"
         weighting_statement = ""
+
+    # Guardrail: avoid incoherent phrasing that treats non-fundamental opponent as fundamental.
+    lowered = debate_response.lower()
+    if opponent_analyst != "fundamental" and "fundamental case you've presented" in lowered:
+        debate_response = (
+            f"I acknowledge the {opponent_analyst} concerns, but for "
+            f"{horizon_label(selected_horizon)} the financial strength still supports my stance."
+        )
 
     print(
         f"\n[Fundamental Debate] {ticker}: rating {current_rating.value} -> {revised_rating.value}"
@@ -233,6 +266,7 @@ Return ONLY valid JSON:
                     "confidence": revised_confidence,
                 },
                 "weighting_statement": weighting_statement,
+                "horizon_alignment_note": horizon_alignment_note,
             }
         }
     }

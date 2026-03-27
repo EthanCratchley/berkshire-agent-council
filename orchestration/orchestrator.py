@@ -1,5 +1,6 @@
 from itertools import combinations
 
+from shared.horizon import normalize_horizon, horizon_label
 from shared.state_schema import BerkshireState, make_initial_debate_state
 from shared.stance import parse_rating, rating_to_score
 
@@ -238,19 +239,23 @@ def _record_debater_turn_if_available(
         "final_position": snap.get("final_position", {}),
         "weighting_statement": snap.get("weighting_statement", ""),
     }
-    conceded = entry["claims_conceded"] or ["none"]
-    disputed = entry["claims_disputed"] or ["none"]
-    entry["conversation_line"] = (
-        f"{speaker.title()}: conceded [{'; '.join(conceded)}], "
-        f"disputed [{'; '.join(disputed)}], "
-        f"weighting [{entry.get('weighting_statement') or 'not provided'}], "
-        f"final_position [{entry.get('rating')}, conf={entry.get('confidence')}]"
-    )
+    natural = str(entry.get("debate_response", "")).strip()
+    if natural:
+        entry["conversation_line"] = (
+            f"{speaker.title()}: {natural} "
+            f"(final: {entry.get('rating')}, conf={entry.get('confidence')})"
+        )
+    else:
+        entry["conversation_line"] = (
+            f"{speaker.title()}: No detailed rebuttal provided. "
+            f"(final: {entry.get('rating')}, conf={entry.get('confidence')})"
+        )
     return entry, speaker
 
 
 def orchestrator(state: BerkshireState):
     ticker = state.get("ticker", "UNKNOWN")
+    selected_horizon = normalize_horizon(state.get("horizon", "swing"))
     signals = state.get("analyst_signals", {})
     debate = state.get("debate") or make_initial_debate_state()
 
@@ -350,6 +355,13 @@ def orchestrator(state: BerkshireState):
     pair_last_signature = dict(debate.get("pair_last_signature", {}) or {})
     active_prev = debate.get("active_challenge", {}) if isinstance(debate.get("active_challenge"), dict) else {}
     active = contradictions[0]
+    active = {
+        **active,
+        "selected_horizon": selected_horizon,
+        "debate_question": (
+            "Given the selected horizon, revise your stance or defend it with domain-specific reasoning."
+        ),
+    }
 
     # Max rounds guard.
     if round_no >= max_rounds:
@@ -438,6 +450,7 @@ def orchestrator(state: BerkshireState):
 
     print("\n---ORCHESTRATOR REVIEW ---")
     print(f"Ticker: {ticker}")
+    print(f"Horizon: {horizon_label(selected_horizon)}")
     print(f"Analysts with valid stances: {len(signal_snapshots)}")
     print(
         f"Effective analysts (confidence >= {EFFECTIVE_CONFIDENCE_THRESHOLD:.2f}): "

@@ -4,6 +4,7 @@ import logging
 import yfinance as yf
 
 from shared.state_schema import BerkshireState, make_initial_debate_state
+from shared.horizon import normalize_horizon, horizon_label, horizon_day_range
 from nodes.data_fetcher import data_fetcher
 from nodes.technical_node import technical_node
 from nodes.sentiment_node import sentiment_node
@@ -39,6 +40,15 @@ def route_from_orchestrator(state: BerkshireState):
     }:
         return next_node
     return "synthesizer_node"
+
+
+def prompt_for_horizon() -> str:
+    print("Select analysis horizon:")
+    print("  short - Short-term (1-10 trading days)")
+    print("  swing - Swing (2-8 weeks) [default]")
+    print("  long  - Long-term (6-24 months)")
+    raw = input("Enter horizon [short/swing/long]: ").strip().lower()
+    return normalize_horizon(raw if raw else "swing")
 
 
 # Build graph.
@@ -100,21 +110,35 @@ if __name__ == "__main__":
         if not is_valid_ticker(user_input):
             print(f"{user_input}' is not a valid stock ticker. Please try again.\n")
             continue
+        selected_horizon = prompt_for_horizon()
+        horizon_min_days, horizon_max_days = horizon_day_range(selected_horizon)
 
         initial_state = {
             "ticker": user_input,
+            "horizon": selected_horizon,
+            "horizon_days": {
+                "min": horizon_min_days,
+                "max": horizon_max_days,
+            },
             "data": {},
             "analyst_signals": {},
             "debate": make_initial_debate_state(max_rounds=3),
             "final_report": {},
         }
 
-        print(f"\nDispatching agents for {user_input}...")
+        print(
+            f"\nDispatching agents for {user_input} "
+            f"({horizon_label(selected_horizon)})..."
+        )
         final_state = app.invoke(initial_state)
 
         final_report = final_state.get("final_report", {})
         if final_report:
+            print(f"Horizon: {final_report.get('horizon_label', horizon_label(selected_horizon))}")
             print(f"Final Recommendation: {final_report.get('recommendation', 'N/A')}")
             print(f"Rationale: {final_report.get('rationale', 'No rationale generated.')}")
+            detailed_narrative = final_report.get("detailed_narrative", "")
+            if detailed_narrative:
+                print(f"Market Summary: {detailed_narrative}")
 
         print("\n" + "=" * 40 + "\n")
