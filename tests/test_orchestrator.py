@@ -41,7 +41,8 @@ def test_high_confidence_opposite_signals_create_challenge():
     challenge = debate["queue"][0]
     assert challenge["id"] == "fundamental_vs_sentiment"
     assert challenge["target"] == "fundamental"
-    assert challenge["opponent"] == "sentiment"
+    assert challenge["primary_opponent"] == "sentiment"
+    assert "coalition" in challenge
     assert debate["active_challenge"]["id"] == challenge["id"]
 
 
@@ -98,3 +99,21 @@ def test_invalid_rating_is_ignored():
     result = orchestrator(state)
     assert result["debate"]["status"] == "resolved"
     assert result["debate"]["active_challenge"] is None
+
+
+def test_coalition_context_contains_partial_agreement_bucket():
+    state = _state_with_signals({
+        "sentiment": {"rating": "strong_buy", "confidence": 0.90, "details": ""},
+        "fundamental": {"rating": "sell", "confidence": 0.72, "details": ""},
+        "technical": {"rating": "buy", "confidence": 0.80, "details": ""},
+        "macro": {"rating": "hold", "confidence": 0.70, "details": ""},
+    })
+
+    result = orchestrator(state)
+    challenge = result["debate"]["active_challenge"]
+    coalition = challenge["coalition"]
+
+    assert isinstance(coalition["supporters_of_opponent"], list)
+    assert isinstance(coalition["supporters_of_target"], list)
+    assert isinstance(coalition["partial"], list)
+    assert "net_support_for_opponent" in coalition
