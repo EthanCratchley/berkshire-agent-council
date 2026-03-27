@@ -9,7 +9,13 @@ ANALYST_ORDER = ["sentiment", "fundamental", "technical", "macro"]
 
 
 def analyst_to_node_name(analyst: str) -> str:
-    return f"{analyst}_node"
+    mapping = {
+        "sentiment": "sentiment_node",
+        "fundamental": "fundamental_node",
+        "technical": "technical_node",
+        "macro": "macro_econ_node",
+    }
+    return mapping.get(analyst, "synthesizer_node")
 
 
 def analyst_to_debate_node_name(analyst: str) -> str:
