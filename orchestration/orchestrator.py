@@ -12,6 +12,15 @@ def analyst_to_node_name(analyst: str) -> str:
     return f"{analyst}_node"
 
 
+def analyst_to_debate_node_name(analyst: str) -> str:
+    """
+    Debate-time routing can differ from initial collection routing.
+    """
+    if analyst == "fundamental":
+        return "fundamental_debate_node"
+    return analyst_to_node_name(analyst)
+
+
 def _extract_signal_snapshot(signals: dict) -> dict:
     snapshots = {}
     for analyst, payload in (signals or {}).items():
@@ -235,7 +244,7 @@ def _dispatch_debate_turn(
     )
     return {
         "status": "debating",
-        "next_node": analyst_to_node_name(speaker),
+        "next_node": analyst_to_debate_node_name(speaker),
         "round": round_no,
         "active_challenge": active,
         "awaiting_response_from": speaker,

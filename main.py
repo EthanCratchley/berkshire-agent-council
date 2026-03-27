@@ -8,6 +8,7 @@ from nodes.data_fetcher import data_fetcher
 from nodes.technical_node import technical_node
 from nodes.sentiment_node import sentiment_node
 from nodes.fundamental_node import fundamental_node
+from nodes.fundamental_debate_node import fundamental_debate_node
 from nodes.macro_econ_node import macro_econ_node
 from nodes.synthesizer_node import synthesizer_node
 from orchestration.orchestrator import orchestrator
@@ -31,6 +32,7 @@ def route_from_orchestrator(state: BerkshireState):
     if next_node in {
         "sentiment_node",
         "fundamental_node",
+        "fundamental_debate_node",
         "technical_node",
         "macro_econ_node",
         "synthesizer_node",
@@ -44,6 +46,7 @@ workflow = StateGraph(BerkshireState)
 workflow.add_node("data_fetcher", data_fetcher)
 workflow.add_node("sentiment_node", sentiment_node)
 workflow.add_node("fundamental_node", fundamental_node)
+workflow.add_node("fundamental_debate_node", fundamental_debate_node)
 workflow.add_node("technical_node", technical_node)
 workflow.add_node("macro_econ_node", macro_econ_node)
 workflow.add_node("orchestrator", orchestrator)
@@ -56,6 +59,7 @@ workflow.add_edge("data_fetcher", "orchestrator")
 # Any analyst turn routes back to orchestrator.
 workflow.add_edge("sentiment_node", "orchestrator")
 workflow.add_edge("fundamental_node", "orchestrator")
+workflow.add_edge("fundamental_debate_node", "orchestrator")
 workflow.add_edge("technical_node", "orchestrator")
 workflow.add_edge("macro_econ_node", "orchestrator")
 
@@ -68,6 +72,7 @@ workflow.add_conditional_edges(
     {
         "sentiment_node": "sentiment_node",
         "fundamental_node": "fundamental_node",
+        "fundamental_debate_node": "fundamental_debate_node",
         "technical_node": "technical_node",
         "macro_econ_node": "macro_econ_node",
         "synthesizer_node": "synthesizer_node",
@@ -113,4 +118,3 @@ if __name__ == "__main__":
             print(f"Rationale: {final_report.get('rationale', 'No rationale generated.')}")
 
         print("\n" + "=" * 40 + "\n")
-

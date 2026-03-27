@@ -58,7 +58,7 @@ def test_first_debate_turn_targets_outlier():
     result = orchestrator(state)
     debate = result["debate"]
     assert debate["status"] == "debating"
-    assert debate["next_node"] == "fundamental_node"
+    assert debate["next_node"] == "fundamental_debate_node"
     assert debate["awaiting_response_from"] == "fundamental"
     assert debate["active_challenge"]["primary_opponent"] == "sentiment"
 
@@ -98,4 +98,3 @@ def test_max_rounds_routes_to_synthesizer():
     debate = result["debate"]
     assert debate["status"] == "max_rounds_reached"
     assert debate["next_node"] == "synthesizer_node"
-
