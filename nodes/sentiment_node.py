@@ -13,9 +13,60 @@ except ImportError:
     ChatGoogleGenerativeAI = None
 
 from shared.state_schema import BerkshireState
-from shared.stance import Rating, sentiment_rating_from_score, rating_to_score, rating_to_signal
+from shared.stance import Rating, parse_rating, sentiment_rating_from_score, rating_to_score, rating_to_signal
 
 load_dotenv()
+
+
+def _clean_json_text(raw: str) -> str:
+    raw = (raw or "").strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[-1]
+        raw = raw.rsplit("```", 1)[0].strip()
+    return raw
+
+
+def _is_string_list(value) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _valid_contract(payload: dict) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    required = (
+        "score",
+        "reasoning",
+        "claims_conceded",
+        "claims_disputed",
+        "weighting_statement",
+        "final_position",
+    )
+    if any(key not in payload for key in required):
+        return False
+    try:
+        score = int(payload.get("score"))
+    except (TypeError, ValueError):
+        return False
+    if score < 1 or score > 10:
+        return False
+    if not isinstance(payload.get("reasoning"), str):
+        return False
+    if not _is_string_list(payload.get("claims_conceded")):
+        return False
+    if not _is_string_list(payload.get("claims_disputed")):
+        return False
+    if not isinstance(payload.get("weighting_statement"), str):
+        return False
+    final_position = payload.get("final_position")
+    if not isinstance(final_position, dict):
+        return False
+    if parse_rating(final_position.get("rating")) is None:
+        return False
+    try:
+        float(final_position.get("confidence"))
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 def sentiment_node(state: BerkshireState):
@@ -35,25 +86,49 @@ def sentiment_node(state: BerkshireState):
     data = state.get("data", {})
     news_articles = data.get("news_articles", [])
     debate = state.get("debate", {})
+    prior_sentiment = state.get("analyst_signals", {}).get("sentiment", {})
+    prior_rating = prior_sentiment.get("rating")
 
     challenge_context = ""
+    is_debate_turn = False
     active_challenge = debate.get("active_challenge", {})
     awaiting = debate.get("awaiting_response_from")
     if isinstance(active_challenge, dict) and awaiting == "sentiment":
+        is_debate_turn = True
         coalition = active_challenge.get("coalition", {})
+        my_case = active_challenge.get("my_case", {})
+        opponent_case = active_challenge.get("opponent_case", {})
+        opponent_supporters = coalition.get("supporters_of_opponent", [])
+        partial_supporters = coalition.get("partial", [])
+        supporter_lines = []
+        for entry in opponent_supporters[:2]:
+            supporter_lines.append(
+                f"{entry.get('analyst', 'unknown')}: rating={entry.get('rating', '')}, details={entry.get('details', '')}"
+            )
+        partial_lines = []
+        for entry in partial_supporters[:2]:
+            partial_lines.append(
+                f"{entry.get('analyst', 'unknown')}: rating={entry.get('rating', '')}, details={entry.get('details', '')}"
+            )
         challenge_context = (
             f"\nDEBATE CONTEXT:\n"
             f"- Challenge ID: {active_challenge.get('id', '')}\n"
             f"- You are asked to: {active_challenge.get('action', 'revise_or_defend')}\n"
             f"- Primary disagreement: {active_challenge.get('reason', '')}\n"
+            f"- Your current case: rating={my_case.get('rating', '')}, confidence={my_case.get('confidence', '')}, details={my_case.get('details', '')}\n"
+            f"- Opponent case: rating={opponent_case.get('rating', '')}, confidence={opponent_case.get('confidence', '')}, details={opponent_case.get('details', '')}\n"
+            f"- Opponent last rebuttal: {opponent_case.get('last_debate_response', '')}\n"
             f"- Supporters of opponent: {len(coalition.get('supporters_of_opponent', []))}\n"
             f"- Partial-agreement analysts: {len(coalition.get('partial', []))}\n"
+            f"- Supporting analyst arguments: {supporter_lines}\n"
+            f"- Partial-agreement analyst arguments: {partial_lines}\n"
             f"Keep your response grounded in the provided news evidence.\n"
         )
 
     # --- Edge case: no news available ---
     if not news_articles:
         print(f"[Sentiment] No news articles found for {ticker}. Defaulting to neutral.")
+        position_changed = prior_rating not in (None, Rating.HOLD.value)
         return {
             "analyst_signals": {
                 "sentiment": {
@@ -64,6 +139,16 @@ def sentiment_node(state: BerkshireState):
                         "news_volume": 0,
                     },
                     "details": "No news articles were available to analyze. Defaulting to neutral.",
+                    "debate_response": "No news data available to revise stance; defaulting to hold.",
+                    "position_changed": position_changed,
+                    "counterpoints_addressed": [],
+                    "claims_conceded": [],
+                    "claims_disputed": [],
+                    "final_position": {
+                        "rating": Rating.HOLD.value,
+                        "confidence": 0.0,
+                    },
+                    "weighting_statement": "No evidence available.",
                 }
             }
         }
@@ -98,8 +183,12 @@ NEWS ARTICLES:
 {challenge_context}
 
 You MUST respond with ONLY valid JSON in this exact format, no extra text:
-{{"score": <integer 1-10>, "reasoning": "<brief 1-2 sentence explanation>"}}
+{{"score": <integer 1-10>, "reasoning": "<brief 1-2 sentence explanation>", "claims_conceded": ["<opponent claim accepted>"], "claims_disputed": ["<opponent claim disputed>"], "weighting_statement": "<what factor mattered more and why>", "final_position": {{"rating":"<strong_buy|buy|hold|sell|strong_sell>", "confidence": <0.0-1.0>}}}}
 """
+
+    claims_conceded = []
+    claims_disputed = []
+    weighting_statement = ""
 
     # --- Call Gemini ---
     try:
@@ -113,17 +202,28 @@ You MUST respond with ONLY valid JSON in this exact format, no extra text:
             google_api_key=os.getenv("GOOGLE_API_KEY"),
         )
         response = llm.invoke(prompt)
-        raw_text = response.content.strip()
-
-        # Clean potential markdown code fences from LLM response
-        if raw_text.startswith("```"):
-            raw_text = raw_text.split("\n", 1)[-1]  # Remove first line (```json)
-            raw_text = raw_text.rsplit("```", 1)[0]  # Remove trailing ```
-            raw_text = raw_text.strip()
+        raw_text = _clean_json_text(response.content)
 
         result = json.loads(raw_text)
+        if not _valid_contract(result):
+            repair_prompt = (
+                "Return ONLY valid JSON for this schema:\n"
+                '{"score":5,"reasoning":"...","claims_conceded":["..."],"claims_disputed":["..."],'
+                '"weighting_statement":"...","final_position":{"rating":"strong_buy|buy|hold|sell|strong_sell","confidence":0.0}}\n'
+                f"Original response:\n{raw_text}"
+            )
+            repair = llm.invoke(repair_prompt)
+            repaired_raw = _clean_json_text(repair.content)
+            result = json.loads(repaired_raw)
+
+        if not _valid_contract(result):
+            raise ValueError("LLM response did not satisfy strict debate contract.")
+
         score = int(result.get("score", 5))
-        reasoning = result.get("reasoning", "No reasoning provided.")
+        reasoning = str(result.get("reasoning", "No reasoning provided.")).strip()
+        claims_conceded = result.get("claims_conceded", [])
+        claims_disputed = result.get("claims_disputed", [])
+        weighting_statement = str(result.get("weighting_statement", "")).strip()
 
         # Clamp score to valid range
         score = max(1, min(10, score))
@@ -132,20 +232,32 @@ You MUST respond with ONLY valid JSON in this exact format, no extra text:
         print(f"[Sentiment] Warning: Could not parse LLM response as JSON. Raw: {raw_text}")
         score = 5
         reasoning = f"LLM response could not be parsed. Raw output: {raw_text}"
+        claims_conceded = []
+        claims_disputed = []
+        weighting_statement = ""
 
     except Exception as e:
         print(f"[Sentiment] Error calling Gemini: {e}")
         score = 5
         reasoning = f"Error during LLM call: {str(e)}"
+        claims_conceded = []
+        claims_disputed = []
+        weighting_statement = ""
 
     # --- Derive stance/rating, signal, confidence, and features ---
     rating = sentiment_rating_from_score(score)
     stance_score = rating_to_score(rating)
     signal = rating_to_signal(rating)
+    position_changed = prior_rating is not None and prior_rating != rating.value
 
     # Confidence: how far the score is from neutral (5.5), normalized to 0.0-1.0
     confidence = round(abs(score - 5.5) / 4.5, 2)
     confidence = min(confidence, 1.0)
+    debate_response = (
+        f"I concede: {', '.join(claims_conceded) if claims_conceded else 'none'}. "
+        f"I dispute: {', '.join(claims_disputed) if claims_disputed else 'none'}. "
+        f"Weighting: {weighting_statement or 'recent sentiment evidence dominates.'}"
+    )
 
     # --- Print result for visibility ---
     label = signal.upper()
@@ -171,6 +283,20 @@ You MUST respond with ONLY valid JSON in this exact format, no extra text:
                     f"sentiment_score={score} ({signal}); rating={rating.value}; "
                     f"articles={len(news_articles)}; {reasoning}"
                 ),
+                "debate_response": (
+                    debate_response
+                    if is_debate_turn and debate_response
+                    else ("Maintaining stance based on current news weighting.")
+                ),
+                "position_changed": position_changed,
+                "counterpoints_addressed": claims_disputed if is_debate_turn else [],
+                "claims_conceded": claims_conceded if is_debate_turn else [],
+                "claims_disputed": claims_disputed if is_debate_turn else [],
+                "final_position": {
+                    "rating": rating.value,
+                    "confidence": confidence,
+                },
+                "weighting_statement": weighting_statement if is_debate_turn else "",
             }
         }
     }

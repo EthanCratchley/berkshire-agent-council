@@ -5,6 +5,8 @@ from shared.stance import parse_rating, rating_to_score
 
 
 HIGH_CONFIDENCE_THRESHOLD = 0.55
+EFFECTIVE_CONFIDENCE_THRESHOLD = 0.30
+STAGNATION_LIMIT = 2
 ANALYST_ORDER = ["sentiment", "fundamental", "technical", "macro"]
 
 
@@ -19,9 +21,6 @@ def analyst_to_node_name(analyst: str) -> str:
 
 
 def analyst_to_debate_node_name(analyst: str) -> str:
-    """
-    Debate-time routing can differ from initial collection routing.
-    """
     if analyst == "fundamental":
         return "fundamental_debate_node"
     return analyst_to_node_name(analyst)
@@ -40,13 +39,19 @@ def _extract_signal_snapshot(signals: dict) -> dict:
             confidence = float(confidence)
         except (TypeError, ValueError):
             continue
-        stance_score = rating_to_score(rating)
         snapshots[analyst] = {
-            "stance_score": stance_score,
-            "score_sign": 1 if stance_score > 0 else (-1 if stance_score < 0 else 0),
+            "stance_score": rating_to_score(rating),
+            "score_sign": 1 if rating_to_score(rating) > 0 else (-1 if rating_to_score(rating) < 0 else 0),
             "rating": rating.value,
             "confidence": max(0.0, min(confidence, 1.0)),
             "details": payload.get("details", ""),
+            "debate_response": payload.get("debate_response", ""),
+            "position_changed": bool(payload.get("position_changed", False)),
+            "counterpoints_addressed": payload.get("counterpoints_addressed", []),
+            "claims_conceded": payload.get("claims_conceded", []),
+            "claims_disputed": payload.get("claims_disputed", []),
+            "final_position": payload.get("final_position", {}),
+            "weighting_statement": payload.get("weighting_statement", ""),
         }
     return snapshots
 
@@ -64,10 +69,11 @@ def _compute_outlier_scores(signal_snapshots: dict) -> dict:
         for other in names:
             if other == name:
                 continue
-            d = _distance(signal_snapshots[name]["stance_score"], signal_snapshots[other]["stance_score"])
-            w = signal_snapshots[other]["confidence"]
-            numerator += d * w
-            denominator += w
+            numerator += _distance(
+                signal_snapshots[name]["stance_score"],
+                signal_snapshots[other]["stance_score"],
+            ) * signal_snapshots[other]["confidence"]
+            denominator += signal_snapshots[other]["confidence"]
         outlier_scores[name] = round((numerator / denominator), 3) if denominator > 0 else 0.0
     return outlier_scores
 
@@ -84,7 +90,6 @@ def _pick_target_for_pair(a_name: str, b_name: str, signal_snapshots: dict, outl
         return a_name, b_name
     if b_conf < a_conf:
         return b_name, a_name
-
     return (a_name, b_name) if a_name <= b_name else (b_name, a_name)
 
 
@@ -102,6 +107,7 @@ def _build_coalition_context(target: str, opponent: str, signal_snapshots: dict)
             "analyst": name,
             "rating": snap["rating"],
             "confidence": snap["confidence"],
+            "details": snap["details"],
             "distance_to_target": d_target,
             "distance_to_opponent": d_opp,
         }
@@ -112,16 +118,12 @@ def _build_coalition_context(target: str, opponent: str, signal_snapshots: dict)
         else:
             partial.append(entry)
 
-    weighted_support_opponent = round(sum(e["confidence"] for e in supporters_of_opponent), 3)
-    weighted_support_target = round(sum(e["confidence"] for e in supporters_of_target), 3)
-    net_support_for_opponent = round(weighted_support_opponent - weighted_support_target, 3)
     return {
         "supporters_of_opponent": supporters_of_opponent,
         "supporters_of_target": supporters_of_target,
         "partial": partial,
-        "weighted_support_opponent": weighted_support_opponent,
-        "weighted_support_target": weighted_support_target,
-        "net_support_for_opponent": net_support_for_opponent,
+        "weighted_support_opponent": round(sum(e["confidence"] for e in supporters_of_opponent), 3),
+        "weighted_support_target": round(sum(e["confidence"] for e in supporters_of_target), 3),
     }
 
 
@@ -129,15 +131,19 @@ def _find_contradictions(signal_snapshots: dict) -> list:
     contradictions = []
     names = sorted(signal_snapshots.keys())
     outlier_scores = _compute_outlier_scores(signal_snapshots)
+
     for a_name, b_name in combinations(names, 2):
         a, b = signal_snapshots[a_name], signal_snapshots[b_name]
         if a["score_sign"] * b["score_sign"] != -1:
             continue
         if a["confidence"] < HIGH_CONFIDENCE_THRESHOLD or b["confidence"] < HIGH_CONFIDENCE_THRESHOLD:
             continue
+
         target, opponent = _pick_target_for_pair(a_name, b_name, signal_snapshots, outlier_scores)
+        coalition = _build_coalition_context(target, opponent, signal_snapshots)
         score_distance = abs(a["stance_score"] - b["stance_score"])
         severity = round(score_distance * min(a["confidence"], b["confidence"]), 2)
+
         contradictions.append(
             {
                 "id": f"{a_name}_vs_{b_name}",
@@ -146,9 +152,25 @@ def _find_contradictions(signal_snapshots: dict) -> list:
                 "score_distance": score_distance,
                 "target": target,
                 "primary_opponent": opponent,
+                "target_snapshot": signal_snapshots[target],
+                "opponent_snapshot": signal_snapshots[opponent],
+                "my_case": {
+                    "analyst": target,
+                    "rating": signal_snapshots[target]["rating"],
+                    "confidence": signal_snapshots[target]["confidence"],
+                    "details": signal_snapshots[target]["details"],
+                    "last_debate_response": signal_snapshots[target].get("debate_response", ""),
+                },
+                "opponent_case": {
+                    "analyst": opponent,
+                    "rating": signal_snapshots[opponent]["rating"],
+                    "confidence": signal_snapshots[opponent]["confidence"],
+                    "details": signal_snapshots[opponent]["details"],
+                    "last_debate_response": signal_snapshots[opponent].get("debate_response", ""),
+                },
                 "target_outlier_score": outlier_scores.get(target, 0.0),
                 "opponent_outlier_score": outlier_scores.get(opponent, 0.0),
-                "coalition": _build_coalition_context(target, opponent, signal_snapshots),
+                "coalition": coalition,
                 "reason": (
                     f"{a_name}={a['rating']}({a['stance_score']:+d}, conf={a['confidence']:.2f}) conflicts with "
                     f"{b_name}={b['rating']}({b['stance_score']:+d}, conf={b['confidence']:.2f})."
@@ -156,6 +178,7 @@ def _find_contradictions(signal_snapshots: dict) -> list:
                 "action": "revise_or_defend",
             }
         )
+
     contradictions.sort(key=lambda item: (-item["severity"], item["id"]))
     return contradictions
 
@@ -167,98 +190,63 @@ def _next_missing_analyst(signal_snapshots: dict):
     return None
 
 
-def _dispatch_debate_turn(
-    debate: dict,
-    contradictions: list,
-    closed_pairs: list,
-):
-    round_no = int(debate.get("round", 0))
-    max_rounds = int(debate.get("max_rounds", 3))
-    awaiting = debate.get("awaiting_response_from")
-    prev_active = debate.get("active_challenge", {}) if isinstance(debate.get("active_challenge"), dict) else {}
-    prev_id = prev_active.get("id")
-
-    active = contradictions[0]
-    active_id = active["id"]
-    history = []
-    unresolved_to_add = []
-
-    # If we already heard from target and contradiction is still active, give opponent one turn.
-    if awaiting and prev_id == active_id and awaiting == active["target"]:
-        speaker = active["primary_opponent"]
-        turn_label = "opponent_turn"
-    # If both target then opponent already spoke and still unresolved, close this pair and move on.
-    elif awaiting and prev_id == active_id and awaiting == active["primary_opponent"]:
-        if active_id not in closed_pairs:
-            closed_pairs.append(active_id)
-        unresolved_to_add.append(
-            {
-                "id": active_id,
-                "reason": "Pair remained contradictory after target and opponent turns.",
-                "challenge": active,
-            }
-        )
-        contradictions = [c for c in contradictions if c["id"] not in closed_pairs]
-        if not contradictions:
-            return {
-                "status": "resolved_with_unresolved_pairs",
-                "next_node": "synthesizer_node",
-                "round": round_no,
-                "active_challenge": None,
-                "awaiting_response_from": None,
-                "queue": [],
-                "closed_pairs": closed_pairs,
-                "history": history + [{"event": "pair_closed_unresolved", "id": active_id}],
-                "unresolved_to_add": unresolved_to_add,
-            }
-        active = contradictions[0]
-        speaker = active["target"]
-        turn_label = "target_turn"
-    else:
-        speaker = active["target"]
-        turn_label = "target_turn"
-
-    if round_no >= max_rounds:
-        unresolved_to_add.append(
-            {
-                "id": active["id"],
-                "reason": f"Max rounds reached before dispatching {speaker}.",
-                "challenge": active,
-            }
-        )
-        return {
-            "status": "max_rounds_reached",
-            "next_node": "synthesizer_node",
-            "round": round_no,
-            "active_challenge": active,
-            "awaiting_response_from": None,
-            "queue": contradictions,
-            "closed_pairs": closed_pairs,
-            "history": history + [{"event": "max_rounds_reached"}],
-            "unresolved_to_add": unresolved_to_add,
-        }
-
-    round_no += 1
-    history.append(
-        {
-            "event": "debate_turn_dispatched",
-            "turn_type": turn_label,
-            "speaker": speaker,
-            "challenge_id": active["id"],
-            "round": round_no,
-        }
+def _signature_for_pair(challenge: dict, signal_snapshots: dict):
+    a, b = challenge["pair"][0], challenge["pair"][1]
+    snap_a = signal_snapshots.get(a, {})
+    snap_b = signal_snapshots.get(b, {})
+    return (
+        snap_a.get("rating"),
+        round(float(snap_a.get("confidence", 0.0)), 2),
+        snap_b.get("rating"),
+        round(float(snap_b.get("confidence", 0.0)), 2),
     )
-    return {
-        "status": "debating",
-        "next_node": analyst_to_debate_node_name(speaker),
-        "round": round_no,
-        "active_challenge": active,
-        "awaiting_response_from": speaker,
-        "queue": contradictions,
-        "closed_pairs": closed_pairs,
-        "history": history,
-        "unresolved_to_add": unresolved_to_add,
+
+
+def _record_debater_turn_if_available(
+    debate: dict,
+    signal_snapshots: dict,
+):
+    """
+    Save human-readable transcript entry from the last dispatched speaker.
+    """
+    if debate.get("status") not in {"debating", "confirming_resolution"}:
+        return None, None
+    active = debate.get("active_challenge", {})
+    if not isinstance(active, dict) or not active.get("id"):
+        return None, None
+    valid_speakers = {active.get("target"), active.get("primary_opponent")}
+    awaiting = debate.get("awaiting_response_from")
+    if not awaiting:
+        return None, None
+    if awaiting not in valid_speakers:
+        return None, None
+    speaker = awaiting
+    snap = signal_snapshots.get(speaker, {})
+    if not snap:
+        return None, None
+
+    entry = {
+        "event": "debater_turn_result",
+        "speaker": speaker,
+        "rating": snap.get("rating"),
+        "confidence": snap.get("confidence"),
+        "debate_response": snap.get("debate_response", ""),
+        "position_changed": snap.get("position_changed", False),
+        "counterpoints_addressed": snap.get("counterpoints_addressed", []),
+        "claims_conceded": snap.get("claims_conceded", []),
+        "claims_disputed": snap.get("claims_disputed", []),
+        "final_position": snap.get("final_position", {}),
+        "weighting_statement": snap.get("weighting_statement", ""),
     }
+    conceded = entry["claims_conceded"] or ["none"]
+    disputed = entry["claims_disputed"] or ["none"]
+    entry["conversation_line"] = (
+        f"{speaker.title()}: conceded [{'; '.join(conceded)}], "
+        f"disputed [{'; '.join(disputed)}], "
+        f"weighting [{entry.get('weighting_statement') or 'not provided'}], "
+        f"final_position [{entry.get('rating')}, conf={entry.get('confidence')}]"
+    )
+    return entry, speaker
 
 
 def orchestrator(state: BerkshireState):
@@ -267,80 +255,214 @@ def orchestrator(state: BerkshireState):
     debate = state.get("debate") or make_initial_debate_state()
 
     signal_snapshots = _extract_signal_snapshot(signals)
-    missing_analyst = _next_missing_analyst(signal_snapshots)
-    contradictions_all = _find_contradictions(signal_snapshots) if signal_snapshots else []
-    closed_pairs = list(debate.get("closed_pairs", [])) if isinstance(debate.get("closed_pairs"), list) else []
-    contradictions = [c for c in contradictions_all if c["id"] not in closed_pairs]
+    contradictions = _find_contradictions(signal_snapshots)
+    effective_analysts = [
+        name for name, snap in signal_snapshots.items()
+        if float(snap.get("confidence", 0.0)) >= EFFECTIVE_CONFIDENCE_THRESHOLD
+    ]
 
-    history_entry = {
-        "event": "orchestrator_scan",
-        "ticker": ticker,
-        "round": int(debate.get("round", 0)),
-        "analyst_count": len(signal_snapshots),
-        "contradictions_found": len(contradictions),
-    }
-    debate_update = {"history": [history_entry]}
+    history = [
+        {
+            "event": "orchestrator_scan",
+            "ticker": ticker,
+            "round": int(debate.get("round", 0)),
+            "analyst_count": len(signal_snapshots),
+            "effective_analyst_count": len(effective_analysts),
+            "contradictions_found": len(contradictions),
+        }
+    ]
 
-    if missing_analyst:
-        node_name = analyst_to_node_name(missing_analyst)
-        debate_update.update(
-            {
+    # Store last speaker's dialogue response if this call follows a debate turn.
+    turn_entry, last_speaker = _record_debater_turn_if_available(debate, signal_snapshots)
+    if turn_entry:
+        history.append(turn_entry)
+        print(f"[Debate] {turn_entry.get('conversation_line', '')}")
+
+    # Initial collection phase.
+    missing = _next_missing_analyst(signal_snapshots)
+    if missing:
+        print(f"\n[Orchestrator] Collecting initial stance from: {missing}")
+        return {
+            "debate": {
                 "_replace_lists": ["queue"],
                 "queue": contradictions,
                 "active_challenge": None,
-                "awaiting_response_from": missing_analyst,
-                "next_node": node_name,
+                "awaiting_response_from": missing,
+                "next_node": analyst_to_node_name(missing),
                 "status": "collecting_initial_analyst_stances",
+                "history": history,
             }
-        )
-        print(f"\n[Orchestrator] Collecting initial stance from: {missing_analyst}")
-        return {"debate": debate_update}
+        }
 
+    # No contradiction -> synthesize.
     if not contradictions:
-        debate_update.update(
-            {
+        active_prev = debate.get("active_challenge", {}) if isinstance(debate.get("active_challenge"), dict) else {}
+        previous_speaker = debate.get("awaiting_response_from")
+        no_contradiction_streak = int(debate.get("no_contradiction_streak", 0))
+
+        # Require one confirmation turn after a debate appears to converge.
+        if debate.get("status") in {"debating", "confirming_resolution"} and active_prev.get("id"):
+            target = active_prev.get("target")
+            opponent = active_prev.get("primary_opponent")
+            confirmation_speaker = None
+            if previous_speaker == target and opponent:
+                confirmation_speaker = opponent
+            elif previous_speaker == opponent and target:
+                confirmation_speaker = target
+
+            if no_contradiction_streak < 1 and confirmation_speaker:
+                print("\n[Orchestrator] No contradictions found. Dispatching one confirmation turn before synthesis.")
+                return {
+                    "debate": {
+                        "_replace_lists": ["queue"],
+                        "queue": [],
+                        "active_challenge": active_prev,
+                        "awaiting_response_from": confirmation_speaker,
+                        "next_node": analyst_to_debate_node_name(confirmation_speaker),
+                        "status": "confirming_resolution",
+                        "no_contradiction_streak": no_contradiction_streak + 1,
+                        "history": history + [
+                            {
+                                "event": "resolution_confirmation_dispatched",
+                                "speaker": confirmation_speaker,
+                                "challenge_id": active_prev.get("id"),
+                            }
+                        ],
+                    }
+                }
+
+        return {
+            "debate": {
                 "_replace_lists": ["queue"],
                 "queue": [],
                 "active_challenge": None,
                 "awaiting_response_from": None,
                 "next_node": "synthesizer_node",
                 "status": "resolved",
-                "closed_pairs": closed_pairs,
+                "no_contradiction_streak": no_contradiction_streak + 1,
+                "history": history,
             }
-        )
-        print(f"\n[Orchestrator] No active contradictions for {ticker}. Routing to synthesis.")
-        return {"debate": debate_update}
+        }
 
-    dispatch = _dispatch_debate_turn(debate, contradictions, closed_pairs)
-    replace_lists = ["queue", "closed_pairs"]
-    if dispatch.get("unresolved_to_add"):
-        # append unresolved entries; do not replace historical unresolved list.
-        debate_update["unresolved_contradictions"] = dispatch["unresolved_to_add"]
-    debate_update.update(
+    round_no = int(debate.get("round", 0))
+    max_rounds = int(debate.get("max_rounds", 3))
+    pair_stagnation = dict(debate.get("pair_stagnation", {}) or {})
+    pair_last_signature = dict(debate.get("pair_last_signature", {}) or {})
+    active_prev = debate.get("active_challenge", {}) if isinstance(debate.get("active_challenge"), dict) else {}
+    active = contradictions[0]
+
+    # Max rounds guard.
+    if round_no >= max_rounds:
+        unresolved = [
+            {
+                "id": c["id"],
+                "reason": "Max rounds reached before full convergence.",
+                "challenge": c,
+            }
+            for c in contradictions
+        ]
+        return {
+            "debate": {
+                "_replace_lists": ["queue"],
+                "queue": contradictions,
+                "active_challenge": active,
+                "awaiting_response_from": None,
+                "next_node": "synthesizer_node",
+                "status": "max_rounds_reached",
+                "unresolved_contradictions": unresolved,
+                "history": history + [{"event": "max_rounds_reached"}],
+            }
+        }
+
+    # Stagnation check when we've just completed an opponent turn for the same pair.
+    awaiting_prev = debate.get("awaiting_response_from")
+    if (
+        active_prev.get("id") == active["id"]
+        and awaiting_prev == active["primary_opponent"]
+    ):
+        sig = _signature_for_pair(active, signal_snapshots)
+        last_sig = pair_last_signature.get(active["id"])
+        stagnation = int(pair_stagnation.get(active["id"], 0))
+        if sig == last_sig:
+            stagnation += 1
+        else:
+            stagnation = 0
+        pair_stagnation[active["id"]] = stagnation
+        pair_last_signature[active["id"]] = sig
+
+        if stagnation >= STAGNATION_LIMIT:
+            # Mark unresolved but continue with other contradictions if available.
+            unresolved_entry = {
+                "id": active["id"],
+                "reason": f"Stagnation limit reached ({STAGNATION_LIMIT}) without rating change.",
+                "challenge": active,
+            }
+            remaining = [c for c in contradictions if c["id"] != active["id"]]
+            if not remaining:
+                return {
+                    "debate": {
+                        "_replace_lists": ["queue"],
+                        "queue": [],
+                        "active_challenge": active,
+                        "awaiting_response_from": None,
+                        "next_node": "synthesizer_node",
+                        "status": "resolved_with_unresolved_pairs",
+                        "unresolved_contradictions": [unresolved_entry],
+                        "pair_stagnation": pair_stagnation,
+                        "pair_last_signature": pair_last_signature,
+                        "history": history + [{"event": "pair_marked_unresolved", "id": active["id"]}],
+                    }
+                }
+            active = remaining[0]
+            contradictions = remaining
+
+    # Decide next speaker for current active contradiction.
+    awaiting_prev = debate.get("awaiting_response_from")
+    if active_prev.get("id") == active["id"] and awaiting_prev == active["target"]:
+        next_speaker = active["primary_opponent"]
+        turn_type = "opponent_turn"
+    else:
+        next_speaker = active["target"]
+        turn_type = "target_turn"
+
+    round_no += 1
+    history.append(
         {
-            "_replace_lists": replace_lists,
-            "queue": dispatch["queue"],
-            "closed_pairs": dispatch["closed_pairs"],
-            "active_challenge": dispatch["active_challenge"],
-            "awaiting_response_from": dispatch["awaiting_response_from"],
-            "next_node": dispatch["next_node"],
-            "status": dispatch["status"],
-            "round": dispatch["round"],
-            "history": dispatch["history"],
+            "event": "debate_turn_dispatched",
+            "turn_type": turn_type,
+            "speaker": next_speaker,
+            "challenge_id": active["id"],
+            "round": round_no,
         }
     )
 
     print("\n---ORCHESTRATOR REVIEW ---")
     print(f"Ticker: {ticker}")
     print(f"Analysts with valid stances: {len(signal_snapshots)}")
+    print(
+        f"Effective analysts (confidence >= {EFFECTIVE_CONFIDENCE_THRESHOLD:.2f}): "
+        f"{len(effective_analysts)}"
+    )
     print(f"Contradictions found: {len(contradictions)}")
-    active = dispatch.get("active_challenge")
-    if active:
-        print(
-            f"Active challenge: {active['id']} "
-            f"(target={active['target']}, opponent={active['primary_opponent']}, severity={active['severity']})"
-        )
-    print(f"Dispatch -> {dispatch['next_node']}")
+    print(
+        f"Active challenge: {active['id']} "
+        f"(target={active['target']}, opponent={active['primary_opponent']}, severity={active['severity']})"
+    )
+    print(f"Dispatch -> {analyst_to_debate_node_name(next_speaker)}")
     print("------------------------------\n")
 
-    return {"debate": debate_update}
+    return {
+        "debate": {
+            "_replace_lists": ["queue"],
+            "queue": contradictions,
+            "active_challenge": active,
+            "awaiting_response_from": next_speaker,
+            "next_node": analyst_to_debate_node_name(next_speaker),
+            "status": "debating",
+            "round": round_no,
+            "pair_stagnation": pair_stagnation,
+            "pair_last_signature": pair_last_signature,
+            "no_contradiction_streak": 0,
+            "history": history,
+        }
+    }

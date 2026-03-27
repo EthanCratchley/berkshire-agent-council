@@ -66,7 +66,9 @@ def make_initial_debate_state(max_rounds: int = 3) -> dict:
         "next_node": None,
         "history": [],
         "unresolved_contradictions": [],
-        "closed_pairs": [],
+        "pair_stagnation": {},
+        "pair_last_signature": {},
+        "no_contradiction_streak": 0,
         "status": "not_started",
     }
 
@@ -80,7 +82,7 @@ def merge_debate(existing_debate: dict, new_debate: dict) -> dict:
     - list fields append when provided
 
     Optional control:
-    - pass "_replace_lists": ["queue", "history", "unresolved_contradictions", "closed_pairs"]
+    - pass "_replace_lists": ["queue", "history", "unresolved_contradictions"]
       in new_debate to replace those lists instead of appending.
     """
     existing_debate = existing_debate or {}
@@ -92,7 +94,7 @@ def merge_debate(existing_debate: dict, new_debate: dict) -> dict:
 
     # Seed from existing debate state first.
     for key, value in existing_debate.items():
-        if key in ("queue", "history", "unresolved_contradictions", "closed_pairs"):
+        if key in ("queue", "history", "unresolved_contradictions"):
             merged[key] = list(value) if isinstance(value, list) else []
         else:
             merged[key] = value
@@ -103,12 +105,22 @@ def merge_debate(existing_debate: dict, new_debate: dict) -> dict:
     replace_lists = set(replace_lists)
 
     # Merge scalar fields.
-    for key in ("round", "max_rounds", "active_challenge", "awaiting_response_from", "next_node", "status"):
+    for key in (
+        "round",
+        "max_rounds",
+        "active_challenge",
+        "awaiting_response_from",
+        "next_node",
+        "pair_stagnation",
+        "pair_last_signature",
+        "no_contradiction_streak",
+        "status",
+    ):
         if key in new_debate:
             merged[key] = new_debate[key]
 
     # Merge list fields.
-    for key in ("queue", "history", "unresolved_contradictions", "closed_pairs"):
+    for key in ("queue", "history", "unresolved_contradictions"):
         if key not in new_debate:
             continue
 

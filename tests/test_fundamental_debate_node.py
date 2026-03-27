@@ -37,5 +37,7 @@ def test_fundamental_debate_node_preserves_quant_and_adds_narrative():
     assert sig["rating"] in ("strong_buy", "buy", "hold", "sell", "strong_sell")
     assert sig["confidence"] == 0.6
     assert isinstance(sig["narrative"], str)
+    assert isinstance(sig["debate_response"], str)
+    assert isinstance(sig["position_changed"], bool)
+    assert isinstance(sig["counterpoints_addressed"], list)
     assert "Fundamental explanation" in sig["details"]
-
