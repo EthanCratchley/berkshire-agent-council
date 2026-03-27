@@ -2,118 +2,100 @@ from orchestration.orchestrator import orchestrator
 from shared.state_schema import make_initial_debate_state
 
 
-def _state_with_signals(signals: dict):
+def _state_with_signals(signals: dict, debate_overrides=None):
+    debate = make_initial_debate_state(max_rounds=3)
+    if debate_overrides:
+        debate.update(debate_overrides)
     return {
         "ticker": "AAPL",
         "data": {},
         "analyst_signals": signals,
-        "debate": make_initial_debate_state(max_rounds=3),
+        "debate": debate,
         "final_report": {},
     }
 
 
-def test_no_contradictions_resolved_status():
-    state = _state_with_signals({
-        "sentiment": {"rating": "buy", "confidence": 0.78, "details": "Positive press."},
-        "fundamental": {"rating": "strong_buy", "confidence": 0.66, "details": "Strong margins."},
-    })
+def _all_nodes_same_side():
+    return {
+        "sentiment": {"rating": "buy", "confidence": 0.8, "details": ""},
+        "fundamental": {"rating": "strong_buy", "confidence": 0.7, "details": ""},
+        "technical": {"rating": "buy", "confidence": 0.6, "details": ""},
+        "macro": {"rating": "hold", "confidence": 0.7, "details": ""},
+    }
 
+
+def test_collects_missing_initial_analysts():
+    state = _state_with_signals(
+        {
+            "sentiment": {"rating": "buy", "confidence": 0.8, "details": ""},
+        }
+    )
     result = orchestrator(state)
     debate = result["debate"]
+    assert debate["status"] == "collecting_initial_analyst_stances"
+    assert debate["next_node"] == "fundamental_node"
+    assert debate["awaiting_response_from"] == "fundamental"
 
+
+def test_resolved_routes_to_synthesizer():
+    state = _state_with_signals(_all_nodes_same_side())
+    result = orchestrator(state)
+    debate = result["debate"]
     assert debate["status"] == "resolved"
+    assert debate["next_node"] == "synthesizer_node"
     assert debate["active_challenge"] is None
-    assert debate["queue"] == []
-    assert debate["unresolved_contradictions"] == []
 
 
-def test_high_confidence_opposite_signals_create_challenge():
-    state = _state_with_signals({
-        "sentiment": {"rating": "strong_buy", "confidence": 0.91, "details": "Strong momentum."},
-        "fundamental": {"rating": "sell", "confidence": 0.72, "details": "Weak earnings quality."},
-    })
-
+def test_first_debate_turn_targets_outlier():
+    state = _state_with_signals(
+        {
+            "sentiment": {"rating": "strong_buy", "confidence": 0.9, "details": ""},
+            "fundamental": {"rating": "sell", "confidence": 0.72, "details": ""},
+            "technical": {"rating": "buy", "confidence": 0.8, "details": ""},
+            "macro": {"rating": "hold", "confidence": 0.7, "details": ""},
+        }
+    )
     result = orchestrator(state)
     debate = result["debate"]
-
     assert debate["status"] == "debating"
-    assert len(debate["queue"]) == 1
-    challenge = debate["queue"][0]
-    assert challenge["id"] == "fundamental_vs_sentiment"
-    assert challenge["target"] == "fundamental"
-    assert challenge["primary_opponent"] == "sentiment"
-    assert "coalition" in challenge
-    assert debate["active_challenge"]["id"] == challenge["id"]
+    assert debate["next_node"] == "fundamental_node"
+    assert debate["awaiting_response_from"] == "fundamental"
+    assert debate["active_challenge"]["primary_opponent"] == "sentiment"
 
 
-def test_low_confidence_disagreement_is_not_queued():
-    state = _state_with_signals({
-        "sentiment": {"rating": "strong_buy", "confidence": 0.90, "details": "Strong momentum."},
-        "fundamental": {"rating": "sell", "confidence": 0.40, "details": "Weak earnings quality."},
-    })
-
+def test_second_turn_dispatches_primary_opponent():
+    state = _state_with_signals(
+        {
+            "sentiment": {"rating": "strong_buy", "confidence": 0.9, "details": ""},
+            "fundamental": {"rating": "sell", "confidence": 0.72, "details": ""},
+            "technical": {"rating": "buy", "confidence": 0.8, "details": ""},
+            "macro": {"rating": "hold", "confidence": 0.7, "details": ""},
+        },
+        debate_overrides={
+            "awaiting_response_from": "fundamental",
+            "active_challenge": {"id": "fundamental_vs_sentiment"},
+            "round": 1,
+        },
+    )
     result = orchestrator(state)
     debate = result["debate"]
+    assert debate["next_node"] == "sentiment_node"
+    assert debate["awaiting_response_from"] == "sentiment"
+    assert debate["round"] == 2
 
-    assert debate["status"] == "resolved"
-    assert debate["queue"] == []
 
-
-def test_multiple_contradictions_sorted_by_severity():
-    state = _state_with_signals({
-        "sentiment": {"rating": "strong_buy", "confidence": 0.90, "details": ""},
-        "technical": {"rating": "buy", "confidence": 0.58, "details": ""},
-        "fundamental": {"rating": "strong_sell", "confidence": 0.80, "details": ""},
-        "macro": {"rating": "sell", "confidence": 0.60, "details": ""},
-    })
-
+def test_max_rounds_routes_to_synthesizer():
+    state = _state_with_signals(
+        {
+            "sentiment": {"rating": "strong_buy", "confidence": 0.9, "details": ""},
+            "fundamental": {"rating": "sell", "confidence": 0.72, "details": ""},
+            "technical": {"rating": "buy", "confidence": 0.8, "details": ""},
+            "macro": {"rating": "hold", "confidence": 0.7, "details": ""},
+        },
+        debate_overrides={"round": 3, "max_rounds": 3},
+    )
     result = orchestrator(state)
-    queue = result["debate"]["queue"]
+    debate = result["debate"]
+    assert debate["status"] == "max_rounds_reached"
+    assert debate["next_node"] == "synthesizer_node"
 
-    assert len(queue) == 4
-    severities = [c["severity"] for c in queue]
-    assert severities == sorted(severities, reverse=True)
-    assert queue[0]["id"] == "fundamental_vs_sentiment"
-
-
-def test_rating_only_payloads_are_supported():
-    state = _state_with_signals({
-        "sentiment": {"rating": "strong_buy", "confidence": 0.90, "details": ""},
-        "fundamental": {"rating": "sell", "confidence": 0.80, "details": ""},
-    })
-
-    result = orchestrator(state)
-    challenge = result["debate"]["active_challenge"]
-
-    assert result["debate"]["status"] == "debating"
-    assert challenge["score_distance"] == 3
-    assert challenge["severity"] == 2.4  # 3 * min(0.90, 0.80)
-
-
-def test_invalid_rating_is_ignored():
-    state = _state_with_signals({
-        "sentiment": {"rating": "banana", "confidence": 0.90, "details": ""},
-        "fundamental": {"rating": "sell", "confidence": 0.80, "details": ""},
-    })
-
-    result = orchestrator(state)
-    assert result["debate"]["status"] == "resolved"
-    assert result["debate"]["active_challenge"] is None
-
-
-def test_coalition_context_contains_partial_agreement_bucket():
-    state = _state_with_signals({
-        "sentiment": {"rating": "strong_buy", "confidence": 0.90, "details": ""},
-        "fundamental": {"rating": "sell", "confidence": 0.72, "details": ""},
-        "technical": {"rating": "buy", "confidence": 0.80, "details": ""},
-        "macro": {"rating": "hold", "confidence": 0.70, "details": ""},
-    })
-
-    result = orchestrator(state)
-    challenge = result["debate"]["active_challenge"]
-    coalition = challenge["coalition"]
-
-    assert isinstance(coalition["supporters_of_opponent"], list)
-    assert isinstance(coalition["supporters_of_target"], list)
-    assert isinstance(coalition["partial"], list)
-    assert "net_support_for_opponent" in coalition

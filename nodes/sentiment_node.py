@@ -34,6 +34,22 @@ def sentiment_node(state: BerkshireState):
     ticker = state.get("ticker", "UNKNOWN")
     data = state.get("data", {})
     news_articles = data.get("news_articles", [])
+    debate = state.get("debate", {})
+
+    challenge_context = ""
+    active_challenge = debate.get("active_challenge", {})
+    awaiting = debate.get("awaiting_response_from")
+    if isinstance(active_challenge, dict) and awaiting == "sentiment":
+        coalition = active_challenge.get("coalition", {})
+        challenge_context = (
+            f"\nDEBATE CONTEXT:\n"
+            f"- Challenge ID: {active_challenge.get('id', '')}\n"
+            f"- You are asked to: {active_challenge.get('action', 'revise_or_defend')}\n"
+            f"- Primary disagreement: {active_challenge.get('reason', '')}\n"
+            f"- Supporters of opponent: {len(coalition.get('supporters_of_opponent', []))}\n"
+            f"- Partial-agreement analysts: {len(coalition.get('partial', []))}\n"
+            f"Keep your response grounded in the provided news evidence.\n"
+        )
 
     # --- Edge case: no news available ---
     if not news_articles:
@@ -79,6 +95,7 @@ from 1 to 10 where:
 
 NEWS ARTICLES:
 {headlines_text}
+{challenge_context}
 
 You MUST respond with ONLY valid JSON in this exact format, no extra text:
 {{"score": <integer 1-10>, "reasoning": "<brief 1-2 sentence explanation>"}}
@@ -133,7 +150,7 @@ You MUST respond with ONLY valid JSON in this exact format, no extra text:
     # --- Print result for visibility ---
     label = signal.upper()
     print(
-        f"\n[Sentiment] {ticker}: {label} / {rating.upper()} "
+        f"\n[Sentiment] {ticker}: {label} / {rating.value.upper()} "
         f"(stance_score={stance_score:+d}, confidence: {confidence})"
     )
     print(f"[Sentiment]   sentiment_score: {score} -> {signal}")

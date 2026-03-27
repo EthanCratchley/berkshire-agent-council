@@ -159,7 +159,7 @@ def fundamental_node(state: BerkshireState):
         # Debug output
         label = signal.upper()
         print(
-            f"\n[Fundamental] {ticker}: {label} / {rating.upper()} "
+            f"\n[Fundamental] {ticker}: {label} / {rating.value.upper()} "
             f"(stance_score={stance_score:+d}, confidence: {confidence})"
         )
         if sector:
