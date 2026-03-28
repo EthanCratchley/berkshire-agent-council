@@ -160,7 +160,15 @@ def synthesizer_node(state: BerkshireState):
             f"{EFFECTIVE_CONTRIBUTOR_CONFIDENCE:.2f})."
         )
 
-    top_contributors = ", ".join([b["analyst"] for b in analyst_breakdown[:2]]) if analyst_breakdown else "none"
+    ranked_contributors = sorted(
+        analyst_breakdown,
+        key=lambda b: (
+            abs(float(b.get("score", 0.0)) * float(b.get("weighted_confidence", 0.0))),
+            float(b.get("weighted_confidence", 0.0)),
+        ),
+        reverse=True,
+    )
+    top_contributors = ", ".join([b["analyst"] for b in ranked_contributors[:2]]) if ranked_contributors else "none"
     section_1_debate = (
         f"The analysts debated under {selected_horizon_label}. "
         f"{'At least one contradiction remained unresolved.' if unresolved else 'The debate converged without unresolved contradictions.'}"
