@@ -104,20 +104,16 @@ def merge_debate(existing_debate: dict, new_debate: dict) -> dict:
         replace_lists = []
     replace_lists = set(replace_lists)
 
-    # Merge scalar fields.
-    for key in (
-        "round",
-        "max_rounds",
-        "active_challenge",
-        "awaiting_response_from",
-        "next_node",
-        "pair_stagnation",
-        "pair_last_signature",
-        "no_contradiction_streak",
-        "status",
-    ):
-        if key in new_debate:
-            merged[key] = new_debate[key]
+    # Merge scalar fields from incoming debate state.
+    # This keeps behavior future-proof for new metadata keys while preserving
+    # explicit list merge behavior below.
+    list_fields = {"queue", "history", "unresolved_contradictions"}
+    for key, value in new_debate.items():
+        if key == "_replace_lists" or key in list_fields:
+            continue
+        if isinstance(value, list):
+            continue
+        merged[key] = value
 
     # Merge list fields.
     for key in ("queue", "history", "unresolved_contradictions"):
