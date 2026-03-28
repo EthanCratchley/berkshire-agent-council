@@ -172,6 +172,7 @@ def technical_node(state: BerkshireState):
     price_df = _build_price_dataframe(price_history)
     if price_df.empty:
         print(f"[Technical] Could not build price DataFrame for {ticker}. Defaulting to hold.")
+        position_changed = prior_rating not in (None, Rating.HOLD.value)
         return {
             "analyst_signals": {
                 "technical": {
@@ -180,7 +181,7 @@ def technical_node(state: BerkshireState):
                     "features": {k: None for k in INDICATOR_THRESHOLDS},
                     "details": "Price data could not be parsed for technical analysis.",
                     "debate_response": "Price data unparseable; holding neutral stance.",
-                    "position_changed": False,
+                    "position_changed": position_changed,
                     "counterpoints_addressed": [],
                     "claims_conceded": [],
                     "claims_disputed": [],

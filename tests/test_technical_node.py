@@ -551,6 +551,19 @@ def test_position_changed_tracking():
         assert sig["position_changed"] is False
 
 
+def test_position_changed_tracking_on_parse_failure():
+    """Parse-failure fallback to hold should still mark position_changed from prior non-hold."""
+    prior = {"rating": "buy"}
+    # Missing Volume forces _build_price_dataframe to return empty DataFrame.
+    records = [{"Close": 100.0 + i} for i in range(10)]
+    state = _make_state(price_records=records, prior_technical=prior)
+    result = technical_node(state)
+    sig = result["analyst_signals"]["technical"]
+
+    assert sig["rating"] == "hold"
+    assert sig["position_changed"] is True
+
+
 # ---------------------------------------------------------------------------
 # _build_price_dataframe helper tests
 # ---------------------------------------------------------------------------
