@@ -253,13 +253,28 @@ def data_fetcher(state: BerkshireState):
         }
 
         macro_indicators = {}
+        raw_series_cache = {}
         for key, series_id in series_map.items():
             try:
                 series = fred.get_series(series_id)
+                raw_series_cache[key] = series
                 latest_value = float(series.tail(1).iloc[0])
                 macro_indicators[key] = latest_value
             except Exception:
                 macro_indicators[key] = None
+
+        # Compute CPI year-over-year % change from the full series
+        try:
+            cpi_series = raw_series_cache.get("cpi")
+            if cpi_series is not None and len(cpi_series) >= 13:
+                current_cpi = float(cpi_series.iloc[-1])
+                year_ago_cpi = float(cpi_series.iloc[-13])  # ~12 months prior
+                if year_ago_cpi != 0:
+                    macro_indicators["cpi_yoy"] = round(
+                        ((current_cpi - year_ago_cpi) / year_ago_cpi) * 100, 2
+                    )
+        except Exception:
+            pass
 
         data["macro_indicators"] = macro_indicators
 

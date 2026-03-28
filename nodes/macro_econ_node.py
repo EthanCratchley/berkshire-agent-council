@@ -10,7 +10,7 @@ MACRO_THRESHOLDS = {
     "yield_curve_spread": {"bullish_above": 1.0, "bearish_below": 0.0},
     "unemployment": {"bullish_below": 4.0, "bearish_above": 6.0},
     "fed_funds_rate": {"bullish_below": 3.0, "bearish_above": 5.0},
-    "cpi": {"bullish_below": 2.5, "bearish_above": 4.0},
+    "cpi_yoy": {"bullish_below": 2.5, "bearish_above": 4.0},
 }
 
 # Horizon-based indicator weights
@@ -21,21 +21,21 @@ HORIZON_INDICATOR_WEIGHTS = {
         "yield_curve_spread": 1.25,
         "unemployment": 0.75,
         "fed_funds_rate": 1.0,
-        "cpi": 0.75,
+        "cpi_yoy": 0.75,
     },
     "swing": {
         "vix": 1.0,
         "yield_curve_spread": 1.0,
         "unemployment": 1.0,
         "fed_funds_rate": 1.0,
-        "cpi": 1.0,
+        "cpi_yoy": 1.0,
     },
     "long": {
         "vix": 0.75,
         "yield_curve_spread": 1.0,
         "unemployment": 1.25,
         "fed_funds_rate": 1.25,
-        "cpi": 1.5,
+        "cpi_yoy": 1.5,
     },
 }
 
@@ -47,8 +47,8 @@ def _score_macro_indicator(name: str, value) -> int:
 
     thresholds = MACRO_THRESHOLDS.get(name, {})
 
-    # "lower is better" indicators: VIX, unemployment, fed_funds_rate, CPI
-    if name in ("vix", "unemployment", "fed_funds_rate", "cpi"):
+    # "lower is better" indicators: VIX, unemployment, fed_funds_rate, cpi_yoy
+    if name in ("vix", "unemployment", "fed_funds_rate", "cpi_yoy"):
         bullish_below = thresholds.get("bullish_below")
         bearish_above = thresholds.get("bearish_above")
         if bullish_below is not None and value < bullish_below:
@@ -144,7 +144,7 @@ def macro_econ_node(state: BerkshireState):
         "yield_curve_spread": macro_indicators.get("yield_curve_spread"),
         "unemployment": macro_indicators.get("unemployment"),
         "fed_funds_rate": macro_indicators.get("fed_funds_rate"),
-        "cpi": macro_indicators.get("cpi"),
+        "cpi_yoy": macro_indicators.get("cpi_yoy"),
     }
 
     weights = HORIZON_INDICATOR_WEIGHTS.get(selected_horizon, HORIZON_INDICATOR_WEIGHTS["swing"])
