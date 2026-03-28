@@ -61,7 +61,7 @@ def test_complete_data_bullish():
     result = fundamental_node(state)
     sig = result["analyst_signals"]["fundamental"]
 
-    assert sig["signal"] == "bullish"
+    assert sig["rating"] == "strong_buy"
     assert sig["confidence"] > 0.5
     assert all(v is not None for v in sig["features"].values())
 
@@ -81,7 +81,7 @@ def test_complete_data_bearish():
     result = fundamental_node(state)
     sig = result["analyst_signals"]["fundamental"]
 
-    assert sig["signal"] == "bearish"
+    assert sig["rating"] == "strong_sell"
 
 
 def test_mixed_data_neutral():
@@ -99,7 +99,25 @@ def test_mixed_data_neutral():
     result = fundamental_node(state)
     sig = result["analyst_signals"]["fundamental"]
 
-    assert sig["signal"] == "neutral"
+    assert sig["rating"] == "hold"
+
+
+def test_moderate_bullish_maps_to_buy():
+    """A mild positive score should map to buy (+1), not strong_buy (+2)."""
+    state = _make_state({
+        "company_info": {
+            "trailingPE": 10.0,       # bullish for tech
+            "debtToEquity": 20.0,     # bullish for tech
+            "profitMargins": 0.10,    # neutral for tech
+            "revenueGrowth": 0.05,    # neutral for tech
+            "trailingEps": 1.5,       # neutral for tech
+            "sector": "Technology",
+        }
+    })
+    result = fundamental_node(state)
+    sig = result["analyst_signals"]["fundamental"]
+
+    assert sig["rating"] == "buy"
 
 
 def test_missing_company_info_uses_fallback():
@@ -120,7 +138,7 @@ def test_empty_data_returns_neutral():
     result = fundamental_node(state)
     sig = result["analyst_signals"]["fundamental"]
 
-    assert sig["signal"] == "neutral"
+    assert sig["rating"] == "hold"
     assert sig["confidence"] == 0.0
     assert all(v is None for v in sig["features"].values())
 
@@ -160,7 +178,7 @@ def test_zero_values_no_crash():
     result = fundamental_node(state)
     sig = result["analyst_signals"]["fundamental"]
 
-    assert sig["signal"] in ("bullish", "bearish", "neutral")
+    assert sig["rating"] in ("strong_buy", "buy", "hold", "sell", "strong_sell")
     assert all(v is not None for v in sig["features"].values())
 
 
@@ -191,7 +209,7 @@ def test_output_contract():
     assert "fundamental" in result["analyst_signals"]
 
     sig = result["analyst_signals"]["fundamental"]
-    assert sig["signal"] in ("bullish", "bearish", "neutral")
+    assert sig["rating"] in ("strong_buy", "buy", "hold", "sell", "strong_sell")
     assert 0.0 <= sig["confidence"] <= 1.0
     assert isinstance(sig["features"], dict)
     assert set(sig["features"].keys()) == {
@@ -219,7 +237,7 @@ def test_sector_thresholds_applied():
     # Under default thresholds it would be bearish (> 25)
     assert sig["features"]["pe_ratio"] == 30.0
     # The overall signal depends on all metrics, but P/E shouldn't drag it to bearish
-    assert sig["signal"] in ("bullish", "bearish", "neutral")
+    assert sig["rating"] in ("strong_buy", "buy", "hold", "sell", "strong_sell")
 
 
 def test_unknown_sector_uses_defaults():
@@ -238,7 +256,7 @@ def test_unknown_sector_uses_defaults():
     sig = result["analyst_signals"]["fundamental"]
 
     # P/E=30 under defaults is bearish (> 25)
-    assert sig["signal"] in ("bullish", "bearish", "neutral")
+    assert sig["rating"] in ("strong_buy", "buy", "hold", "sell", "strong_sell")
     assert sig["confidence"] > 0.0
 
 
@@ -248,7 +266,7 @@ def test_no_data_key_returns_neutral():
     result = fundamental_node(state)
     sig = result["analyst_signals"]["fundamental"]
 
-    assert sig["signal"] == "neutral"
+    assert sig["rating"] == "hold"
     assert sig["confidence"] == 0.0
 
 
