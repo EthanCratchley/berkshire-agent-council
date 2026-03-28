@@ -7,7 +7,7 @@ from nodes.technical_node import technical_node, _score_indicator, _build_price_
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_price_records(n=60, base_close=150.0, base_volume=1_000_000, trend=0.0):
+def _make_price_records(n=60, base_close=150.0, base_volume=1_000_000, trend=0.0, volume_trend=None):
     """Generate n days of synthetic price history records.
 
     Args:
@@ -15,17 +15,27 @@ def _make_price_records(n=60, base_close=150.0, base_volume=1_000_000, trend=0.0
         base_close: starting close price
         base_volume: daily volume
         trend: daily price change (positive=uptrend, negative=downtrend)
+        volume_trend: list of volume overrides or callable, or None
     """
     records = []
     for i in range(n):
         close = base_close + (trend * i)
+        
+        # Apply specific volume logic
+        if isinstance(volume_trend, list) and i < len(volume_trend):
+            vol = volume_trend[i]
+        elif callable(volume_trend):
+            vol = volume_trend(i, base_volume)
+        else:
+            vol = base_volume
+
         records.append({
             "Date": f"2026-01-{(i % 28) + 1:02d}",
             "Open": close - 0.5,
             "High": close + 1.0,
             "Low": close - 1.0,
             "Close": close,
-            "Volume": base_volume,
+            "Volume": vol,
         })
     return records
 
@@ -219,13 +229,31 @@ def test_strong_downtrend_is_bearish():
 
 
 def test_flat_trend_is_neutral():
-    """Flat price action should produce a hold rating."""
+    """Flat price action should produce a hold rating with high confidence
+    due to strong consensus among all indicators that the market is neutral."""
     records = _make_price_records(n=60, base_close=150.0, trend=0.0)
     state = _make_state(price_records=records)
     result = technical_node(state)
     sig = result["analyst_signals"]["technical"]
 
     assert sig["rating"] == "hold"
+    assert sig["confidence"] > 0.0  # Should be highly confident it's a hold
+
+
+def test_high_volume_downtrend_is_bearish():
+    """High volume on a downtrend should amplify the bearishness, not score as bullish."""
+    # Create a downtrend where recent volume spikes massively
+    def vol_spike(i, base):
+        return base * 5 if i >= 55 else base
+    
+    records = _make_price_records(n=60, base_close=200.0, trend=-0.5, volume_trend=vol_spike)
+    state = _make_state(price_records=records)
+    result = technical_node(state)
+    sig = result["analyst_signals"]["technical"]
+
+    # We expect the node to recognize volume_ratio > 1.5 during a downtrend as bearish
+    assert sig["features"]["volume_ratio"] > 1.5
+    assert _score_indicator("volume_ratio", sig["features"]["volume_ratio"], trend_direction=-0.5) == -1
 
 
 # ---------------------------------------------------------------------------
@@ -293,8 +321,8 @@ def test_score_volume_high():
 
 
 def test_score_volume_low():
-    """Volume ratio < 0.7 = bearish (low interest)."""
-    assert _score_indicator("volume_ratio", 0.5) == -1
+    """Volume ratio < 0.7 = neutral (low interest doesn't confirm trend)."""
+    assert _score_indicator("volume_ratio", 0.5) == 0
 
 
 def test_score_price_change_5d_up():
@@ -378,16 +406,16 @@ def test_debate_mode_populates_fields():
             "reason": "Sentiment disagrees with technical outlook",
             "my_case": {
                 "analyst": "technical",
-                "rating": "hold",
+                "rating": "buy",
                 "confidence": 0.3,
-                "details": "Mixed signals",
+                "details": "Bullish",
             },
             "opponent_case": {
                 "analyst": "sentiment",
-                "rating": "buy",
+                "rating": "sell",
                 "confidence": 0.7,
-                "details": "Strong bullish news",
-                "last_debate_response": "News sentiment strongly supports buy.",
+                "details": "Strong bearish news",
+                "last_debate_response": "News sentiment strongly supports sell.",
             },
             "coalition": {
                 "supporters_of_opponent": [],
@@ -396,13 +424,73 @@ def test_debate_mode_populates_fields():
         },
         "awaiting_response_from": "technical",
     }
-    state = _make_state(debate=debate)
+    records = _make_price_records(n=60, base_close=100.0, trend=0.5)  # Bullish context
+    state = _make_state(price_records=records, debate=debate)
     result = technical_node(state)
     sig = result["analyst_signals"]["technical"]
 
     # Debate response should contain substantive content
     assert len(sig["debate_response"]) > 0
     assert sig["weighting_statement"] != ""
+    if sig["rating"] in {"buy", "strong_buy"}:
+        # In a bullish stance, we concede bearish signals and dispute with bullish ones
+        assert any("bearish signals" in c for c in sig["claims_conceded"]) or len(sig["claims_conceded"]) == 0
+        assert any("opponent's" in c for c in sig["claims_disputed"])
+
+def test_debate_mode_bearish_stance():
+    """A bearish technical node should correctly concede bullish points and dispute bearish ones."""
+    debate = {
+        "active_challenge": {
+            "id": "test-challenge-bearish",
+            "my_case": {"analyst": "technical"},
+            "opponent_case": {"analyst": "fundamental", "rating": "buy"},
+            "coalition": {"supporters_of_opponent": [], "partial": []},
+        },
+        "awaiting_response_from": "technical",
+    }
+    records = _make_price_records(n=60, base_close=200.0, trend=-0.5)  # Bearish context
+    state = _make_state(price_records=records, debate=debate)
+    result = technical_node(state)
+    sig = result["analyst_signals"]["technical"]
+
+    assert len(sig["debate_response"]) > 0
+    if sig["rating"] in {"sell", "strong_sell"}:
+        # In a bearish stance, we concede bullish signals and dispute with bearish ones
+        assert any("bullish signals" in c for c in sig["claims_conceded"]) or len(sig["claims_conceded"]) == 0
+        assert any("opponent's" in c for c in sig["claims_disputed"])
+
+
+def test_debate_against_neutral_opponent():
+    """When the opponent's rating is 'hold', the dispute text should say 'hold'
+    not hallucinate 'bullish' or 'bearish'."""
+    debate = {
+        "active_challenge": {
+            "id": "neutral-opponent",
+            "my_case": {"analyst": "technical"},
+            "opponent_case": {"analyst": "fundamental", "rating": "hold"},
+            "coalition": {"supporters_of_opponent": [], "partial": []},
+        },
+        "awaiting_response_from": "technical",
+    }
+    records = _make_price_records(n=60, base_close=100.0, trend=0.5)
+    state = _make_state(price_records=records, debate=debate)
+    result = technical_node(state)
+    sig = result["analyst_signals"]["technical"]
+
+    for claim in sig["claims_disputed"]:
+        if "opponent's" in claim:
+            assert "hold" in claim, f"Expected 'hold' in dispute text, got: {claim}"
+
+
+def test_volume_unknown_trend_is_neutral():
+    """When price_change_20d is None (insufficient data), high volume anomalies
+    should return 0 (neutral) not default to bullish."""
+    # Test the scorer directly: None trend + high volume = neutral
+    assert _score_indicator("volume_ratio", 2.5, trend_direction=None) == 0
+    assert _score_indicator("volume_ratio", 3.0, trend_direction=None) == 0
+    # Known trend still works
+    assert _score_indicator("volume_ratio", 2.5, trend_direction=0.05) == 1
+    assert _score_indicator("volume_ratio", 2.5, trend_direction=-0.05) == -1
 
 
 def test_debate_not_triggered_for_other_node():

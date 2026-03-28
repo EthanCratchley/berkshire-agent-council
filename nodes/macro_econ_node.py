@@ -177,8 +177,13 @@ def macro_econ_node(state: BerkshireState):
     if metrics_with_data == 0:
         confidence = 0.0
     else:
+        weight_by_signal = {1: 0.0, 0: 0.0, -1: 0.0}
+        for name, score in raw_scores.items():
+            if scorable_indicators.get(name) is not None:
+                weight_by_signal[score] += weights.get(name, 1.0)
+        
         data_coverage = metrics_with_data / len(MACRO_THRESHOLDS)
-        agreement = min(abs(weighted_sum) / total_weight, 1.0) if total_weight > 0 else 0.0
+        agreement = max(weight_by_signal.values()) / total_weight if total_weight > 0 else 0.0
         confidence = round(data_coverage * agreement, 2)
 
     # --- Merge features: model features + raw indicators for transparency ---
@@ -212,12 +217,23 @@ def macro_econ_node(state: BerkshireState):
             f"Weighted score={score_sum:+d} for {horizon_label(selected_horizon)}. "
             f"{debate_context_str}"
         )
-        claims_conceded = [
-            f"Acknowledged opposing view but {len(bullish_indicators)} macro indicator(s) remain supportive."
-        ] if bearish_indicators else []
-        claims_disputed = [
-            f"{len(bullish_indicators)} macro indicator(s) contradict the opposing thesis."
-        ] if bullish_indicators and signal != "neutral" else []
+        opponent_rating = opponent_case.get("rating", "unknown") if opponent_case else "unknown"
+        claims_conceded = []
+        claims_disputed = []
+        if signal in ("bullish", "strong_buy", "buy"):
+            if bearish_indicators:
+                claims_conceded.append(f"Acknowledged bearish signals ({', '.join(bearish_indicators)}), but {len(bullish_indicators)} bullish indicator(s) dominate.")
+            if bullish_indicators:
+                claims_disputed.append(f"{len(bullish_indicators)} bullish indicator(s) contradict the opponent's {opponent_rating} thesis.")
+        elif signal in ("bearish", "strong_sell", "sell"):
+            if bullish_indicators:
+                claims_conceded.append(f"Acknowledged bullish signals ({', '.join(bullish_indicators)}), but {len(bearish_indicators)} bearish indicator(s) dominate.")
+            if bearish_indicators:
+                claims_disputed.append(f"{len(bearish_indicators)} bearish indicator(s) contradict the opponent's {opponent_rating} thesis.")
+        else:
+            if bullish_indicators or bearish_indicators:
+                claims_conceded.append(f"Acknowledged mixed signals ({len(bullish_indicators)} bullish, {len(bearish_indicators)} bearish) which prevent a strong stance.")
+            claims_disputed.append("The overall lack of consensus among indicators contradicts any strong directional thesis.")
     else:
         debate_response = f"Maintaining {signal} stance based on {metrics_with_data} macro indicators."
         claims_conceded = []

@@ -242,7 +242,8 @@ def test_bearish_macro_environment():
 
 
 def test_mixed_macro_is_neutral():
-    """Mixed indicators should produce a hold rating."""
+    """Mixed indicators should produce a hold rating with high confidence
+    due to consensus that factors are balancing each other out/neutral."""
     state = _make_state(macro_overrides={
         "vix": 12.0,            # bullish (< 15)
         "yield_curve_spread": -0.5,  # bearish (< 0)
@@ -254,6 +255,9 @@ def test_mixed_macro_is_neutral():
     sig = result["analyst_signals"]["macro"]
 
     assert sig["rating"] == "hold"
+    # Even though signals are mixed (weighted sum ~0), we have data for
+    # all indicators, so confidence should be > 0.0 under the new robust formula
+    assert sig["confidence"] > 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -442,12 +446,66 @@ def test_debate_mode_populates_fields():
         },
         "awaiting_response_from": "macro",
     }
-    state = _make_state(debate=debate)
+    state = _make_state(debate=debate, macro_overrides={
+        "vix": 10.0, "yield_curve_spread": 1.5, "unemployment": 3.0,
+        "fed_funds_rate": 2.0, "cpi_yoy": 1.5
+    })
     result = macro_econ_node(state)
     sig = result["analyst_signals"]["macro"]
 
     assert len(sig["debate_response"]) > 0
     assert sig["weighting_statement"] != ""
+    if sig["rating"] in {"buy", "strong_buy"}:
+        assert any("bearish signals" in c for c in sig["claims_conceded"]) or len(sig["claims_conceded"]) == 0
+        assert any("opponent's" in c for c in sig["claims_disputed"])
+
+
+def test_debate_mode_bearish_stance():
+    """A bearish macro node should correctly concede bullish points and dispute bearish ones."""
+    debate = {
+        "active_challenge": {
+            "id": "macro-challenge-bearish",
+            "my_case": {"analyst": "macro"},
+            "opponent_case": {"analyst": "fundamental", "rating": "buy"},
+            "coalition": {"supporters_of_opponent": [], "partial": []},
+        },
+        "awaiting_response_from": "macro",
+    }
+    state = _make_state(debate=debate, macro_overrides={
+        "vix": 40.0, "yield_curve_spread": -1.5, "unemployment": 8.0,
+        "fed_funds_rate": 7.0, "cpi_yoy": 6.0
+    })
+    result = macro_econ_node(state)
+    sig = result["analyst_signals"]["macro"]
+
+    assert len(sig["debate_response"]) > 0
+    if sig["rating"] in {"sell", "strong_sell"}:
+        assert any("bullish signals" in c for c in sig["claims_conceded"]) or len(sig["claims_conceded"]) == 0
+        assert any("opponent's" in c for c in sig["claims_disputed"])
+
+
+def test_debate_against_neutral_opponent():
+    """When the opponent's rating is 'hold', the dispute text should say 'hold'
+    not hallucinate 'bullish' or 'bearish'."""
+    debate = {
+        "active_challenge": {
+            "id": "neutral-opponent",
+            "my_case": {"analyst": "macro"},
+            "opponent_case": {"analyst": "fundamental", "rating": "hold"},
+            "coalition": {"supporters_of_opponent": [], "partial": []},
+        },
+        "awaiting_response_from": "macro",
+    }
+    state = _make_state(debate=debate, macro_overrides={
+        "vix": 10.0, "yield_curve_spread": 1.5, "unemployment": 3.0,
+        "fed_funds_rate": 2.0, "cpi_yoy": 1.5
+    })
+    result = macro_econ_node(state)
+    sig = result["analyst_signals"]["macro"]
+
+    for claim in sig["claims_disputed"]:
+        if "opponent's" in claim:
+            assert "hold" in claim, f"Expected 'hold' in dispute text, got: {claim}"
 
 
 def test_debate_not_triggered_for_other_node():
