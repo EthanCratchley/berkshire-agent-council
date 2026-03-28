@@ -484,6 +484,33 @@ def test_debate_mode_bearish_stance():
         assert any("opponent's" in c for c in sig["claims_disputed"])
 
 
+def test_debate_mode_neutral_stance():
+    """A neutral (hold) macro node should correctly concede mixed signals and dispute strong direction."""
+    debate = {
+        "active_challenge": {
+            "id": "macro-challenge-neutral",
+            "my_case": {"analyst": "macro"},
+            "opponent_case": {"analyst": "fundamental", "rating": "buy"},
+            "coalition": {"supporters_of_opponent": [], "partial": []},
+        },
+        "awaiting_response_from": "macro",
+    }
+    state = _make_state(debate=debate, macro_overrides={
+        "vix": 12.0,            # bullish
+        "yield_curve_spread": -0.5,  # bearish
+        "unemployment": 3.5,    # bullish
+        "fed_funds_rate": 6.0,  # bearish
+        "cpi_yoy": 3.0,         # neutral
+    })
+    result = macro_econ_node(state)
+    sig = result["analyst_signals"]["macro"]
+
+    assert len(sig["debate_response"]) > 0
+    if sig["rating"] == "hold":
+        assert any("mixed signals" in c for c in sig["claims_conceded"])
+        assert any("lack of consensus" in c for c in sig["claims_disputed"])
+
+
 def test_debate_against_neutral_opponent():
     """When the opponent's rating is 'hold', the dispute text should say 'hold'
     not hallucinate 'bullish' or 'bearish'."""

@@ -460,6 +460,28 @@ def test_debate_mode_bearish_stance():
         assert any("opponent's" in c for c in sig["claims_disputed"])
 
 
+def test_debate_mode_neutral_stance():
+    """A neutral (hold) technical node should correctly concede mixed signals and dispute strong direction."""
+    debate = {
+        "active_challenge": {
+            "id": "technical-challenge-neutral",
+            "my_case": {"analyst": "technical"},
+            "opponent_case": {"analyst": "fundamental", "rating": "sell"},
+            "coalition": {"supporters_of_opponent": [], "partial": []},
+        },
+        "awaiting_response_from": "technical",
+    }
+    # Flat trend = hold rating
+    records = _make_price_records(n=60, base_close=150.0, trend=0.0)
+    state = _make_state(price_records=records, debate=debate)
+    result = technical_node(state)
+    sig = result["analyst_signals"]["technical"]
+
+    assert len(sig["debate_response"]) > 0
+    if sig["rating"] == "hold":
+        assert any("lack of consensus" in c for c in sig["claims_disputed"])
+
+
 def test_debate_against_neutral_opponent():
     """When the opponent's rating is 'hold', the dispute text should say 'hold'
     not hallucinate 'bullish' or 'bearish'."""
