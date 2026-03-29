@@ -11,6 +11,8 @@ from nodes.sentiment_node import sentiment_node
 from nodes.fundamental_node import fundamental_node
 from nodes.fundamental_debate_node import fundamental_debate_node
 from nodes.macro_econ_node import macro_econ_node
+from nodes.macro_debate_node import macro_debate_node
+from nodes.technical_debate_node import technical_debate_node
 from nodes.synthesizer_node import synthesizer_node
 from orchestration.orchestrator import orchestrator
 
@@ -35,7 +37,9 @@ def route_from_orchestrator(state: BerkshireState):
         "fundamental_node",
         "fundamental_debate_node",
         "technical_node",
+        "technical_debate_node",
         "macro_econ_node",
+        "macro_debate_node",
         "synthesizer_node",
     }:
         return next_node
@@ -58,7 +62,9 @@ workflow.add_node("sentiment_node", sentiment_node)
 workflow.add_node("fundamental_node", fundamental_node)
 workflow.add_node("fundamental_debate_node", fundamental_debate_node)
 workflow.add_node("technical_node", technical_node)
+workflow.add_node("technical_debate_node", technical_debate_node)
 workflow.add_node("macro_econ_node", macro_econ_node)
+workflow.add_node("macro_debate_node", macro_debate_node)
 workflow.add_node("orchestrator", orchestrator)
 workflow.add_node("synthesizer_node", synthesizer_node)
 
@@ -71,7 +77,9 @@ workflow.add_edge("sentiment_node", "orchestrator")
 workflow.add_edge("fundamental_node", "orchestrator")
 workflow.add_edge("fundamental_debate_node", "orchestrator")
 workflow.add_edge("technical_node", "orchestrator")
+workflow.add_edge("technical_debate_node", "orchestrator")
 workflow.add_edge("macro_econ_node", "orchestrator")
+workflow.add_edge("macro_debate_node", "orchestrator")
 
 # Final synthesis exits.
 workflow.add_edge("synthesizer_node", END)
@@ -84,7 +92,9 @@ workflow.add_conditional_edges(
         "fundamental_node": "fundamental_node",
         "fundamental_debate_node": "fundamental_debate_node",
         "technical_node": "technical_node",
+        "technical_debate_node": "technical_debate_node",
         "macro_econ_node": "macro_econ_node",
+        "macro_debate_node": "macro_debate_node",
         "synthesizer_node": "synthesizer_node",
     },
 )

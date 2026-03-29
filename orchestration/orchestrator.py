@@ -24,6 +24,10 @@ def analyst_to_node_name(analyst: str) -> str:
 def analyst_to_debate_node_name(analyst: str) -> str:
     if analyst == "fundamental":
         return "fundamental_debate_node"
+    if analyst == "technical":
+        return "technical_debate_node"
+    if analyst == "macro":
+        return "macro_debate_node"
     return analyst_to_node_name(analyst)
 
 

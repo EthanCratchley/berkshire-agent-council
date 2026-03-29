@@ -22,20 +22,16 @@ def _make_macro_indicators(overrides=None):
     return defaults
 
 
-def _make_state(macro_overrides=None, horizon="swing", ticker="AAPL",
-                prior_macro=None, debate=None, include_macro=True):
+def _make_state(macro_overrides=None, horizon="swing", ticker="AAPL", include_macro=True):
     """Build a complete mock state for macro_econ_node testing."""
     state = {
         "ticker": ticker,
         "horizon": horizon,
         "data": {},
         "analyst_signals": {},
-        "debate": debate or {},
     }
     if include_macro:
         state["data"]["macro_indicators"] = _make_macro_indicators(macro_overrides)
-    if prior_macro:
-        state["analyst_signals"]["macro"] = prior_macro
     return state
 
 
@@ -60,18 +56,7 @@ def test_output_contract_shape():
     assert "details" in sig
     assert "horizon_alignment_note" in sig
 
-    # Debate fields
-    assert "debate_response" in sig
-    assert "position_changed" in sig
-    assert "counterpoints_addressed" in sig
-    assert "claims_conceded" in sig
-    assert "claims_disputed" in sig
-    assert "final_position" in sig
-    assert "weighting_statement" in sig
 
-    # final_position sub-fields
-    assert "rating" in sig["final_position"]
-    assert "confidence" in sig["final_position"]
 
 
 def test_rating_is_canonical():
@@ -89,7 +74,6 @@ def test_rating_is_canonical():
         result = macro_econ_node(state)
         sig = result["analyst_signals"]["macro"]
         assert sig["rating"] in CANONICAL, f"Got non-canonical rating: {sig['rating']}"
-        assert sig["final_position"]["rating"] in CANONICAL
 
 
 def test_confidence_clamped_0_to_1():
@@ -105,7 +89,6 @@ def test_confidence_clamped_0_to_1():
         result = macro_econ_node(state)
         sig = result["analyst_signals"]["macro"]
         assert 0.0 <= sig["confidence"] <= 1.0
-        assert 0.0 <= sig["final_position"]["confidence"] <= 1.0
 
 
 def test_features_contain_model_features():
@@ -402,176 +385,7 @@ def test_horizon_weighting_affects_confidence():
     assert 0.0 <= sig_long["confidence"] <= 1.0
 
 
-# ---------------------------------------------------------------------------
-# Debate compatibility tests
-# ---------------------------------------------------------------------------
 
-def test_non_debate_mode_defaults():
-    """In non-debate mode, debate fields should have default/empty values."""
-    state = _make_state()
-    result = macro_econ_node(state)
-    sig = result["analyst_signals"]["macro"]
-
-    assert sig["counterpoints_addressed"] == []
-    assert sig["claims_conceded"] == []
-    assert sig["claims_disputed"] == []
-    assert sig["weighting_statement"] == ""
-    assert sig["position_changed"] is False
-
-
-def test_debate_mode_populates_fields():
-    """When debate is active and awaiting macro, debate fields should be populated."""
-    debate = {
-        "active_challenge": {
-            "id": "macro-challenge-1",
-            "action": "revise_or_defend",
-            "reason": "Technical disagrees with macro outlook",
-            "my_case": {
-                "analyst": "macro",
-                "rating": "hold",
-                "confidence": 0.4,
-                "details": "Mixed macro signals",
-            },
-            "opponent_case": {
-                "analyst": "technical",
-                "rating": "buy",
-                "confidence": 0.6,
-                "details": "Strong price momentum",
-                "last_debate_response": "Price action is clearly bullish.",
-            },
-            "coalition": {
-                "supporters_of_opponent": [],
-                "partial": [],
-            },
-        },
-        "awaiting_response_from": "macro",
-    }
-    state = _make_state(debate=debate, macro_overrides={
-        "vix": 10.0, "yield_curve_spread": 1.5, "unemployment": 3.0,
-        "fed_funds_rate": 2.0, "cpi_yoy": 1.5
-    })
-    result = macro_econ_node(state)
-    sig = result["analyst_signals"]["macro"]
-
-    assert len(sig["debate_response"]) > 0
-    assert sig["weighting_statement"] != ""
-    if sig["rating"] in {"buy", "strong_buy"}:
-        assert any("bearish signals" in c for c in sig["claims_conceded"]) or len(sig["claims_conceded"]) == 0
-        assert any("opponent's" in c for c in sig["claims_disputed"])
-
-
-def test_debate_mode_bearish_stance():
-    """A bearish macro node should correctly concede bullish points and dispute bearish ones."""
-    debate = {
-        "active_challenge": {
-            "id": "macro-challenge-bearish",
-            "my_case": {"analyst": "macro"},
-            "opponent_case": {"analyst": "fundamental", "rating": "buy"},
-            "coalition": {"supporters_of_opponent": [], "partial": []},
-        },
-        "awaiting_response_from": "macro",
-    }
-    state = _make_state(debate=debate, macro_overrides={
-        "vix": 40.0, "yield_curve_spread": -1.5, "unemployment": 8.0,
-        "fed_funds_rate": 7.0, "cpi_yoy": 6.0
-    })
-    result = macro_econ_node(state)
-    sig = result["analyst_signals"]["macro"]
-
-    assert len(sig["debate_response"]) > 0
-    if sig["rating"] in {"sell", "strong_sell"}:
-        assert any("bullish signals" in c for c in sig["claims_conceded"]) or len(sig["claims_conceded"]) == 0
-        assert any("opponent's" in c for c in sig["claims_disputed"])
-
-
-def test_debate_mode_neutral_stance():
-    """A neutral (hold) macro node should correctly concede mixed signals and dispute strong direction."""
-    debate = {
-        "active_challenge": {
-            "id": "macro-challenge-neutral",
-            "my_case": {"analyst": "macro"},
-            "opponent_case": {"analyst": "fundamental", "rating": "buy"},
-            "coalition": {"supporters_of_opponent": [], "partial": []},
-        },
-        "awaiting_response_from": "macro",
-    }
-    state = _make_state(debate=debate, macro_overrides={
-        "vix": 12.0,            # bullish
-        "yield_curve_spread": -0.5,  # bearish
-        "unemployment": 3.5,    # bullish
-        "fed_funds_rate": 6.0,  # bearish
-        "cpi_yoy": 3.0,         # neutral
-    })
-    result = macro_econ_node(state)
-    sig = result["analyst_signals"]["macro"]
-
-    assert len(sig["debate_response"]) > 0
-    if sig["rating"] == "hold":
-        assert any("mixed signals" in c for c in sig["claims_conceded"])
-        assert any("lack of consensus" in c for c in sig["claims_disputed"])
-
-
-def test_debate_against_neutral_opponent():
-    """When the opponent's rating is 'hold', the dispute text should say 'hold'
-    not hallucinate 'bullish' or 'bearish'."""
-    debate = {
-        "active_challenge": {
-            "id": "neutral-opponent",
-            "my_case": {"analyst": "macro"},
-            "opponent_case": {"analyst": "fundamental", "rating": "hold"},
-            "coalition": {"supporters_of_opponent": [], "partial": []},
-        },
-        "awaiting_response_from": "macro",
-    }
-    state = _make_state(debate=debate, macro_overrides={
-        "vix": 10.0, "yield_curve_spread": 1.5, "unemployment": 3.0,
-        "fed_funds_rate": 2.0, "cpi_yoy": 1.5
-    })
-    result = macro_econ_node(state)
-    sig = result["analyst_signals"]["macro"]
-
-    for claim in sig["claims_disputed"]:
-        if "opponent's" in claim:
-            assert "hold" in claim, f"Expected 'hold' in dispute text, got: {claim}"
-
-
-def test_debate_not_triggered_for_other_node():
-    """When debate awaits a different node, macro should NOT enter debate mode."""
-    debate = {
-        "active_challenge": {
-            "id": "sentiment-challenge",
-            "my_case": {"analyst": "sentiment"},
-            "opponent_case": {"analyst": "fundamental"},
-        },
-        "awaiting_response_from": "sentiment",  # Not macro
-    }
-    state = _make_state(debate=debate)
-    result = macro_econ_node(state)
-    sig = result["analyst_signals"]["macro"]
-
-    assert sig["counterpoints_addressed"] == []
-    assert sig["claims_conceded"] == []
-    assert sig["weighting_statement"] == ""
-
-
-def test_position_changed_tracking():
-    """position_changed should be True when the rating changes."""
-    prior = {"rating": "buy"}
-    # Bearish macro → sell, different from prior "buy"
-    state = _make_state(
-        macro_overrides={
-            "vix": 35.0, "yield_curve_spread": -0.5,
-            "unemployment": 7.0, "fed_funds_rate": 6.0, "cpi_yoy": 5.5,
-        },
-        prior_macro=prior,
-    )
-    result = macro_econ_node(state)
-    sig = result["analyst_signals"]["macro"]
-
-    if sig["rating"] != "buy":
-        assert sig["position_changed"] is True
-    else:
-        assert sig["position_changed"] is False
 
 
 # ---------------------------------------------------------------------------

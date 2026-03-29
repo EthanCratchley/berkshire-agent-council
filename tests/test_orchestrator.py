@@ -98,3 +98,35 @@ def test_max_rounds_routes_to_synthesizer():
     debate = result["debate"]
     assert debate["status"] == "max_rounds_reached"
     assert debate["next_node"] == "synthesizer_node"
+
+
+def test_routes_to_technical_debate_node_when_technical_is_outlier():
+    state = _state_with_signals(
+        {
+            "sentiment": {"rating": "strong_buy", "confidence": 0.9, "details": ""},
+            "fundamental": {"rating": "buy", "confidence": 0.8, "details": ""},
+            "technical": {"rating": "strong_sell", "confidence": 0.7, "details": ""},
+            "macro": {"rating": "buy", "confidence": 0.75, "details": ""},
+        }
+    )
+    result = orchestrator(state)
+    debate = result["debate"]
+    assert debate["status"] == "debating"
+    assert debate["awaiting_response_from"] == "technical"
+    assert debate["next_node"] == "technical_debate_node"
+
+
+def test_routes_to_macro_debate_node_when_macro_is_outlier():
+    state = _state_with_signals(
+        {
+            "sentiment": {"rating": "strong_buy", "confidence": 0.9, "details": ""},
+            "fundamental": {"rating": "buy", "confidence": 0.8, "details": ""},
+            "technical": {"rating": "buy", "confidence": 0.75, "details": ""},
+            "macro": {"rating": "strong_sell", "confidence": 0.7, "details": ""},
+        }
+    )
+    result = orchestrator(state)
+    debate = result["debate"]
+    assert debate["status"] == "debating"
+    assert debate["awaiting_response_from"] == "macro"
+    assert debate["next_node"] == "macro_debate_node"
