@@ -123,8 +123,8 @@ def technical_node(state: BerkshireState):
     # --- Evaluation ---
 
     # --- Edge case: no price data ---
-    if not price_history:
-        print(f"[Technical] No price history for {ticker}. Defaulting to hold.")
+    if not data:
+        print(f"[Technical] No data available for {ticker}. Defaulting to neutral.")
         return {
             "analyst_signals": {
                 "technical": {
@@ -137,110 +137,121 @@ def technical_node(state: BerkshireState):
             }
         }
 
-    # --- Compute features ---
-    price_df = _build_price_dataframe(price_history)
-    if price_df.empty:
-        print(f"[Technical] Could not build price DataFrame for {ticker}. Defaulting to hold.")
-        position_changed = prior_rating not in (None, Rating.HOLD.value)
+    try:
+        # --- Compute features ---
+        price_df = _build_price_dataframe(price_history)
+        if price_df.empty:
+            print(f"[Technical] Could not build price DataFrame for {ticker}. Defaulting to neutral.")
+            return {
+                "analyst_signals": {
+                    "technical": {
+                        "rating": Rating.HOLD.value,
+                        "confidence": 0.0,
+                        "features": {k: None for k in INDICATOR_THRESHOLDS},
+                        "details": "Price data could not be parsed for technical analysis.",
+                        "horizon_alignment_note": f"Technical analysis unavailable for {horizon_label(selected_horizon)}.",
+                    }
+                }
+            }
+
+        features = compute_technical_features(price_df)
+
+        # --- Score each indicator with horizon weighting ---
+        weights = HORIZON_INDICATOR_WEIGHTS.get(selected_horizon, HORIZON_INDICATOR_WEIGHTS["swing"])
+        raw_scores = {}
+        weighted_sum = 0.0
+        total_weight = 0.0
+
+        trend_val = features.get("price_change_20d")
+        trend_direction = trend_val  # None stays None — don't assume direction
+
+        for name, value in features.items():
+            raw_score = _score_indicator(name, value, trend_direction)
+            raw_scores[name] = raw_score
+            if value is not None:
+                w = weights.get(name, 1.0)
+                weighted_sum += raw_score * w
+                total_weight += w
+
+        # Round weighted sum to integer for rating lookup
+        if total_weight > 0:
+            normalized_score = weighted_sum / total_weight
+            # Scale to the aggregate score range expected by rating_from_aggregate_score
+            score_sum = round(normalized_score * 3)  # scale factor: max ±3
+        else:
+            score_sum = 0
+
+        rating = rating_from_aggregate_score(score_sum)
+        stance_score = rating_to_score(rating)
+        signal = rating_to_signal(rating)
+
+
+        # --- Confidence ---
+        metrics_with_data = sum(1 for v in features.values() if v is not None)
+        if metrics_with_data == 0:
+            confidence = 0.0
+        else:
+            weight_by_signal = {1: 0.0, 0: 0.0, -1: 0.0}
+            for name, score in raw_scores.items():
+                if features.get(name) is not None:
+                    weight_by_signal[score] += weights.get(name, 1.0)
+            
+            data_coverage = metrics_with_data / len(INDICATOR_THRESHOLDS)
+            agreement = max(weight_by_signal.values()) / total_weight if total_weight > 0 else 0.0
+            confidence = round(data_coverage * agreement, 2)
+
+        # --- Build details string ---
+        detail_parts = []
+        for name, value in features.items():
+            if value is not None:
+                score_label = {1: "bullish", 0: "neutral", -1: "bearish"}[raw_scores[name]]
+                if isinstance(value, float):
+                    detail_parts.append(f"{name}={value:.4f} ({score_label})")
+                else:
+                    detail_parts.append(f"{name}={value} ({score_label})")
+        detail_parts.append(f"rating={rating.value}")
+        detail_parts.append(f"horizon={selected_horizon}")
+        details = "; ".join(detail_parts) if detail_parts else "No technical data available."
+
+        # --- Prepare return ---
+
+        # --- Print result for visibility ---
+        label = signal.upper()
+        print(
+            f"\n[Technical] {ticker}: {label} / {rating.value.upper()} "
+            f"(stance_score={stance_score:+d}, confidence: {confidence})"
+        )
+        for name, value in features.items():
+            if value is not None:
+                fmt_val = f"{value:.2f}" if isinstance(value, float) else str(value)
+                print(f"[Technical]   {name}: {fmt_val} -> {raw_scores[name]:+d}")
+        print(f"[Technical] Metrics available: {metrics_with_data}/7, score sum: {score_sum}")
+
+        # --- Write to state ---
+        return {
+            "analyst_signals": {
+                "technical": {
+                    "rating": rating.value,
+                    "confidence": confidence,
+                    "features": features,
+                    "details": details,
+                    "horizon_alignment_note": (
+                        f"Technical signals interpreted for {horizon_label(selected_horizon)}."
+                    ),
+                }
+            }
+        }
+        
+    except Exception as e:
+        print(f"[Technical] Unexpected error for {ticker}: {e}")
         return {
             "analyst_signals": {
                 "technical": {
                     "rating": Rating.HOLD.value,
                     "confidence": 0.0,
                     "features": {k: None for k in INDICATOR_THRESHOLDS},
-                    "details": "Price data could not be parsed for technical analysis.",
-                    "horizon_alignment_note": f"Technical analysis unavailable for {horizon_label(selected_horizon)}.",
+                    "details": f"Error during technical analysis: {str(e)}",
+                    "horizon_alignment_note": f"Technical analysis failed for {horizon_label(selected_horizon)}.",
                 }
             }
         }
-
-    features = compute_technical_features(price_df)
-
-    # --- Score each indicator with horizon weighting ---
-    weights = HORIZON_INDICATOR_WEIGHTS.get(selected_horizon, HORIZON_INDICATOR_WEIGHTS["swing"])
-    raw_scores = {}
-    weighted_sum = 0.0
-    total_weight = 0.0
-
-    trend_val = features.get("price_change_20d")
-    trend_direction = trend_val  # None stays None — don't assume direction
-
-    for name, value in features.items():
-        raw_score = _score_indicator(name, value, trend_direction)
-        raw_scores[name] = raw_score
-        if value is not None:
-            w = weights.get(name, 1.0)
-            weighted_sum += raw_score * w
-            total_weight += w
-
-    # Round weighted sum to integer for rating lookup
-    if total_weight > 0:
-        normalized_score = weighted_sum / total_weight
-        # Scale to the aggregate score range expected by rating_from_aggregate_score
-        score_sum = round(normalized_score * 3)  # scale factor: max ±3
-    else:
-        score_sum = 0
-
-    rating = rating_from_aggregate_score(score_sum)
-    stance_score = rating_to_score(rating)
-    signal = rating_to_signal(rating)
-
-
-    # --- Confidence ---
-    metrics_with_data = sum(1 for v in features.values() if v is not None)
-    if metrics_with_data == 0:
-        confidence = 0.0
-    else:
-        weight_by_signal = {1: 0.0, 0: 0.0, -1: 0.0}
-        for name, score in raw_scores.items():
-            if features.get(name) is not None:
-                weight_by_signal[score] += weights.get(name, 1.0)
-        
-        data_coverage = metrics_with_data / len(INDICATOR_THRESHOLDS)
-        agreement = max(weight_by_signal.values()) / total_weight if total_weight > 0 else 0.0
-        confidence = round(data_coverage * agreement, 2)
-
-    # --- Build details string ---
-    detail_parts = []
-    for name, value in features.items():
-        if value is not None:
-            score_label = {1: "bullish", 0: "neutral", -1: "bearish"}[raw_scores[name]]
-            if isinstance(value, float):
-                detail_parts.append(f"{name}={value:.4f} ({score_label})")
-            else:
-                detail_parts.append(f"{name}={value} ({score_label})")
-    detail_parts.append(f"rating={rating.value}")
-    detail_parts.append(f"horizon={selected_horizon}")
-    details = "; ".join(detail_parts) if detail_parts else "No technical data available."
-
-    # --- Prepare return ---
-
-    # --- Print result for visibility ---
-    label = signal.upper()
-    print(
-        f"\n[Technical] {ticker}: {label} / {rating.value.upper()} "
-        f"(stance_score={stance_score:+d}, confidence: {confidence})"
-    )
-    for name, value in features.items():
-        if value is not None:
-            fmt_val = f"{value:.4f}" if isinstance(value, float) else str(value)
-            print(f"[Technical]   {name}: {fmt_val} -> {raw_scores[name]:+d}")
-    print(f"[Technical] Indicators available: {metrics_with_data}/7, weighted_sum: {weighted_sum:.2f}")
-
-    # --- Write to state ---
-    return {
-        "analyst_signals": {
-            "technical": {
-                "rating": rating.value,
-                "confidence": confidence,
-                "features": features,
-                "details": details,
-                "horizon_alignment_note": (
-                    f"Technical signals prioritized for {horizon_label(selected_horizon)}: "
-                    f"{'momentum/oscillators weighted heavily' if selected_horizon == 'short' else ''}"
-                    f"{'balanced indicator weighting' if selected_horizon == 'swing' else ''}"
-                    f"{'trend indicators (SMA, 20d change) weighted heavily' if selected_horizon == 'long' else ''}."
-                ),
-            }
-        }
-    }
