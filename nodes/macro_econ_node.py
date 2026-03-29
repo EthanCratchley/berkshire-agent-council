@@ -85,20 +85,21 @@ def macro_econ_node(state: BerkshireState):
     """
     ticker = state.get("ticker", "UNKNOWN")
     selected_horizon = normalize_horizon(state.get("horizon", "swing"))
-    data = state.get("data", {})
+    raw_data = state.get("data")
+    data = raw_data if isinstance(raw_data, dict) else {}
     macro_indicators = data.get("macro_indicators", {})
     # --- Evaluation ---
 
-    # --- Edge case: no macro data ---
-    if not data:
-        print(f"[Macro] No data available for {ticker}. Defaulting to neutral.")
+    # --- Edge case: no macro indicators ---
+    if not macro_indicators:
+        print(f"[Macro] No macro indicators for {ticker}. Defaulting to hold.")
         return {
             "analyst_signals": {
                 "macro": {
                     "rating": Rating.HOLD.value,
                     "confidence": 0.0,
                     "features": {"sector_performance": None, "market_trend": None},
-                    "details": "No macroeconomic data available. Defaulting to neutral.",
+                    "details": "No macro indicators available for macroeconomic analysis. Defaulting to hold.",
                     "horizon_alignment_note": f"No macro data for {horizon_label(selected_horizon)}.",
                 }
             }

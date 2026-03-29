@@ -118,20 +118,21 @@ def technical_node(state: BerkshireState):
     """
     ticker = state.get("ticker", "UNKNOWN")
     selected_horizon = normalize_horizon(state.get("horizon", "swing"))
-    data = state.get("data", {})
+    raw_data = state.get("data")
+    data = raw_data if isinstance(raw_data, dict) else {}
     price_history = data.get("price_history", [])
     # --- Evaluation ---
 
-    # --- Edge case: no price data ---
-    if not data:
-        print(f"[Technical] No data available for {ticker}. Defaulting to neutral.")
+    # --- Edge case: no usable price history ---
+    if not price_history:
+        print(f"[Technical] No price history for {ticker}. Defaulting to hold.")
         return {
             "analyst_signals": {
                 "technical": {
                     "rating": Rating.HOLD.value,
                     "confidence": 0.0,
                     "features": {k: None for k in INDICATOR_THRESHOLDS},
-                    "details": "No price history available for technical analysis.",
+                    "details": "No price history available for technical analysis. Defaulting to hold.",
                     "horizon_alignment_note": f"No technical data for {horizon_label(selected_horizon)}.",
                 }
             }

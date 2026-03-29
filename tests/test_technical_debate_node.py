@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock, patch
+
 from nodes.technical_debate_node import technical_debate_node
 
 
@@ -33,7 +35,24 @@ def test_technical_debate_node_preserves_quant_and_adds_narrative():
         },
         "final_report": {},
     }
-    result = technical_debate_node(state)
+    mock_llm = MagicMock()
+    mock_response = MagicMock()
+    mock_response.content = (
+        '{"explanation":"Technical trend remains mixed but weakening.",'
+        '"claims_conceded":["short-term sentiment stress exists"],'
+        '"claims_disputed":["strong buy is justified now"],'
+        '"weighting_statement":"price momentum remains the dominant short-horizon signal",'
+        '"horizon_alignment_note":"Technical setup is calibrated for swing horizon.",'
+        '"dialogue_response":"I hear the bullish case, but current momentum still looks weak.",'
+        '"final_position":{"rating":"hold","confidence":0.58}}'
+    )
+    mock_llm.invoke.return_value = mock_response
+
+    with patch("nodes.technical_debate_node.ChatGoogleGenerativeAI", return_value=mock_llm), patch(
+        "nodes.technical_debate_node.os.getenv",
+        return_value="fake-key",
+    ):
+        result = technical_debate_node(state)
     sig = result["analyst_signals"]["technical"]
 
     assert sig["rating"] in ("strong_buy", "buy", "hold", "sell", "strong_sell")
