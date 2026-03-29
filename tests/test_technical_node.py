@@ -40,8 +40,7 @@ def _make_price_records(n=60, base_close=150.0, base_volume=1_000_000, trend=0.0
     return records
 
 
-def _make_state(price_records=None, horizon="swing", ticker="AAPL",
-                prior_technical=None, debate=None):
+def _make_state(price_records=None, horizon="swing", ticker="AAPL"):
     """Build a complete mock state for technical_node testing."""
     state = {
         "ticker": ticker,
@@ -50,10 +49,7 @@ def _make_state(price_records=None, horizon="swing", ticker="AAPL",
             "price_history": price_records if price_records is not None else _make_price_records(),
         },
         "analyst_signals": {},
-        "debate": debate or {},
     }
-    if prior_technical:
-        state["analyst_signals"]["technical"] = prior_technical
     return state
 
 
@@ -78,18 +74,7 @@ def test_output_contract_shape():
     assert "details" in sig
     assert "horizon_alignment_note" in sig
 
-    # Debate fields
-    assert "debate_response" in sig
-    assert "position_changed" in sig
-    assert "counterpoints_addressed" in sig
-    assert "claims_conceded" in sig
-    assert "claims_disputed" in sig
-    assert "final_position" in sig
-    assert "weighting_statement" in sig
 
-    # final_position sub-fields
-    assert "rating" in sig["final_position"]
-    assert "confidence" in sig["final_position"]
 
 
 def test_rating_is_canonical():
@@ -101,7 +86,6 @@ def test_rating_is_canonical():
         result = technical_node(state)
         sig = result["analyst_signals"]["technical"]
         assert sig["rating"] in CANONICAL, f"Got non-canonical rating: {sig['rating']}"
-        assert sig["final_position"]["rating"] in CANONICAL
 
 
 def test_confidence_clamped_0_to_1():
@@ -111,7 +95,6 @@ def test_confidence_clamped_0_to_1():
         result = technical_node(state)
         sig = result["analyst_signals"]["technical"]
         assert 0.0 <= sig["confidence"] <= 1.0
-        assert 0.0 <= sig["final_position"]["confidence"] <= 1.0
 
 
 def test_feature_keys_match_expected():
@@ -380,128 +363,7 @@ def test_all_horizons_produce_valid_output():
         assert "horizon_alignment_note" in sig
 
 
-# ---------------------------------------------------------------------------
-# Debate compatibility tests
-# ---------------------------------------------------------------------------
 
-def test_non_debate_mode_defaults():
-    """In non-debate mode, debate fields should have default/empty values."""
-    state = _make_state()
-    result = technical_node(state)
-    sig = result["analyst_signals"]["technical"]
-
-    assert sig["counterpoints_addressed"] == []
-    assert sig["claims_conceded"] == []
-    assert sig["claims_disputed"] == []
-    assert sig["weighting_statement"] == ""
-    assert sig["position_changed"] is False
-
-
-def test_debate_mode_populates_fields():
-    """When debate is active and awaiting technical, debate fields should be populated."""
-    debate = {
-        "active_challenge": {
-            "id": "test-challenge-1",
-            "action": "revise_or_defend",
-            "reason": "Sentiment disagrees with technical outlook",
-            "my_case": {
-                "analyst": "technical",
-                "rating": "buy",
-                "confidence": 0.3,
-                "details": "Bullish",
-            },
-            "opponent_case": {
-                "analyst": "sentiment",
-                "rating": "sell",
-                "confidence": 0.7,
-                "details": "Strong bearish news",
-                "last_debate_response": "News sentiment strongly supports sell.",
-            },
-            "coalition": {
-                "supporters_of_opponent": [],
-                "partial": [],
-            },
-        },
-        "awaiting_response_from": "technical",
-    }
-    records = _make_price_records(n=60, base_close=100.0, trend=0.5)  # Bullish context
-    state = _make_state(price_records=records, debate=debate)
-    result = technical_node(state)
-    sig = result["analyst_signals"]["technical"]
-
-    # Debate response should contain substantive content
-    assert len(sig["debate_response"]) > 0
-    assert sig["weighting_statement"] != ""
-    if sig["rating"] in {"buy", "strong_buy"}:
-        # In a bullish stance, we concede bearish signals and dispute with bullish ones
-        assert any("bearish signals" in c for c in sig["claims_conceded"]) or len(sig["claims_conceded"]) == 0
-        assert any("opponent's" in c for c in sig["claims_disputed"])
-
-def test_debate_mode_bearish_stance():
-    """A bearish technical node should correctly concede bullish points and dispute bearish ones."""
-    debate = {
-        "active_challenge": {
-            "id": "test-challenge-bearish",
-            "my_case": {"analyst": "technical"},
-            "opponent_case": {"analyst": "fundamental", "rating": "buy"},
-            "coalition": {"supporters_of_opponent": [], "partial": []},
-        },
-        "awaiting_response_from": "technical",
-    }
-    records = _make_price_records(n=60, base_close=200.0, trend=-0.5)  # Bearish context
-    state = _make_state(price_records=records, debate=debate)
-    result = technical_node(state)
-    sig = result["analyst_signals"]["technical"]
-
-    assert len(sig["debate_response"]) > 0
-    if sig["rating"] in {"sell", "strong_sell"}:
-        # In a bearish stance, we concede bullish signals and dispute with bearish ones
-        assert any("bullish signals" in c for c in sig["claims_conceded"]) or len(sig["claims_conceded"]) == 0
-        assert any("opponent's" in c for c in sig["claims_disputed"])
-
-
-def test_debate_mode_neutral_stance():
-    """A neutral (hold) technical node should correctly concede mixed signals and dispute strong direction."""
-    debate = {
-        "active_challenge": {
-            "id": "technical-challenge-neutral",
-            "my_case": {"analyst": "technical"},
-            "opponent_case": {"analyst": "fundamental", "rating": "sell"},
-            "coalition": {"supporters_of_opponent": [], "partial": []},
-        },
-        "awaiting_response_from": "technical",
-    }
-    # Flat trend = hold rating
-    records = _make_price_records(n=60, base_close=150.0, trend=0.0)
-    state = _make_state(price_records=records, debate=debate)
-    result = technical_node(state)
-    sig = result["analyst_signals"]["technical"]
-
-    assert len(sig["debate_response"]) > 0
-    if sig["rating"] == "hold":
-        assert any("lack of consensus" in c for c in sig["claims_disputed"])
-
-
-def test_debate_against_neutral_opponent():
-    """When the opponent's rating is 'hold', the dispute text should say 'hold'
-    not hallucinate 'bullish' or 'bearish'."""
-    debate = {
-        "active_challenge": {
-            "id": "neutral-opponent",
-            "my_case": {"analyst": "technical"},
-            "opponent_case": {"analyst": "fundamental", "rating": "hold"},
-            "coalition": {"supporters_of_opponent": [], "partial": []},
-        },
-        "awaiting_response_from": "technical",
-    }
-    records = _make_price_records(n=60, base_close=100.0, trend=0.5)
-    state = _make_state(price_records=records, debate=debate)
-    result = technical_node(state)
-    sig = result["analyst_signals"]["technical"]
-
-    for claim in sig["claims_disputed"]:
-        if "opponent's" in claim:
-            assert "hold" in claim, f"Expected 'hold' in dispute text, got: {claim}"
 
 
 def test_volume_unknown_trend_is_neutral():
@@ -515,40 +377,7 @@ def test_volume_unknown_trend_is_neutral():
     assert _score_indicator("volume_ratio", 2.5, trend_direction=-0.05) == -1
 
 
-def test_debate_not_triggered_for_other_node():
-    """When debate awaits a different node, technical should NOT enter debate mode."""
-    debate = {
-        "active_challenge": {
-            "id": "test-challenge-2",
-            "my_case": {"analyst": "sentiment"},
-            "opponent_case": {"analyst": "fundamental"},
-        },
-        "awaiting_response_from": "sentiment",  # Not technical
-    }
-    state = _make_state(debate=debate)
-    result = technical_node(state)
-    sig = result["analyst_signals"]["technical"]
 
-    assert sig["counterpoints_addressed"] == []
-    assert sig["claims_conceded"] == []
-    assert sig["weighting_statement"] == ""
-
-
-def test_position_changed_tracking():
-    """position_changed should be True when the rating changes from prior."""
-    prior = {"rating": "buy"}
-    # Flat trend → hold, different from prior "buy"
-    state = _make_state(
-        price_records=_make_price_records(n=60, trend=0.0),
-        prior_technical=prior,
-    )
-    result = technical_node(state)
-    sig = result["analyst_signals"]["technical"]
-
-    if sig["rating"] != "buy":
-        assert sig["position_changed"] is True
-    else:
-        assert sig["position_changed"] is False
 
 
 def test_position_changed_tracking_on_parse_failure():

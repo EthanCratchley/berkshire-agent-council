@@ -120,30 +120,11 @@ def technical_node(state: BerkshireState):
     selected_horizon = normalize_horizon(state.get("horizon", "swing"))
     data = state.get("data", {})
     price_history = data.get("price_history", [])
-    debate = state.get("debate", {})
-    prior_technical = state.get("analyst_signals", {}).get("technical", {})
-    prior_rating = prior_technical.get("rating")
-
-    # --- Debate context ---
-    is_debate_turn = False
-    debate_context_str = ""
-    active_challenge = debate.get("active_challenge", {})
-    awaiting = debate.get("awaiting_response_from")
-    if isinstance(active_challenge, dict) and awaiting == "technical":
-        is_debate_turn = True
-        my_case = active_challenge.get("my_case", {})
-        opponent_case = active_challenge.get("opponent_case", {})
-        debate_context_str = (
-            f"Challenged by {opponent_case.get('analyst', 'opponent')} "
-            f"(rating={opponent_case.get('rating', '')}, "
-            f"confidence={opponent_case.get('confidence', '')}). "
-            f"Reason: {active_challenge.get('reason', 'N/A')}."
-        )
+    # --- Evaluation ---
 
     # --- Edge case: no price data ---
     if not price_history:
         print(f"[Technical] No price history for {ticker}. Defaulting to hold.")
-        position_changed = prior_rating not in (None, Rating.HOLD.value)
         return {
             "analyst_signals": {
                 "technical": {
@@ -151,19 +132,7 @@ def technical_node(state: BerkshireState):
                     "confidence": 0.0,
                     "features": {k: None for k in INDICATOR_THRESHOLDS},
                     "details": "No price history available for technical analysis.",
-                    "debate_response": "No price data available to revise stance; defaulting to hold.",
-                    "position_changed": position_changed,
-                    "counterpoints_addressed": [],
-                    "claims_conceded": [],
-                    "claims_disputed": [],
-                    "final_position": {
-                        "rating": Rating.HOLD.value,
-                        "confidence": 0.0,
-                    },
-                    "weighting_statement": "No evidence available.",
-                    "horizon_alignment_note": (
-                        f"No technical data for {horizon_label(selected_horizon)}."
-                    ),
+                    "horizon_alignment_note": f"No technical data for {horizon_label(selected_horizon)}.",
                 }
             }
         }
@@ -180,19 +149,7 @@ def technical_node(state: BerkshireState):
                     "confidence": 0.0,
                     "features": {k: None for k in INDICATOR_THRESHOLDS},
                     "details": "Price data could not be parsed for technical analysis.",
-                    "debate_response": "Price data unparseable; holding neutral stance.",
-                    "position_changed": position_changed,
-                    "counterpoints_addressed": [],
-                    "claims_conceded": [],
-                    "claims_disputed": [],
-                    "final_position": {
-                        "rating": Rating.HOLD.value,
-                        "confidence": 0.0,
-                    },
-                    "weighting_statement": "No usable evidence.",
-                    "horizon_alignment_note": (
-                        f"Technical analysis unavailable for {horizon_label(selected_horizon)}."
-                    ),
+                    "horizon_alignment_note": f"Technical analysis unavailable for {horizon_label(selected_horizon)}.",
                 }
             }
         }
@@ -227,7 +184,7 @@ def technical_node(state: BerkshireState):
     rating = rating_from_aggregate_score(score_sum)
     stance_score = rating_to_score(rating)
     signal = rating_to_signal(rating)
-    position_changed = prior_rating is not None and prior_rating != rating.value
+
 
     # --- Confidence ---
     metrics_with_data = sum(1 for v in features.values() if v is not None)
@@ -256,44 +213,7 @@ def technical_node(state: BerkshireState):
     detail_parts.append(f"horizon={selected_horizon}")
     details = "; ".join(detail_parts) if detail_parts else "No technical data available."
 
-    # --- Debate response ---
-    if is_debate_turn and debate_context_str:
-        bullish_indicators = [n for n, s in raw_scores.items() if s == 1 and features[n] is not None]
-        bearish_indicators = [n for n, s in raw_scores.items() if s == -1 and features[n] is not None]
-        debate_response = (
-            f"Technical indicators support a {signal} stance. "
-            f"Bullish signals: {', '.join(bullish_indicators) or 'none'}. "
-            f"Bearish signals: {', '.join(bearish_indicators) or 'none'}. "
-            f"Weighted score={score_sum:+d} for {horizon_label(selected_horizon)}. "
-            f"{debate_context_str}"
-        )
-        opponent_rating = opponent_case.get("rating", "unknown") if opponent_case else "unknown"
-        claims_conceded = []
-        claims_disputed = []
-        if signal == "bullish":
-            if bearish_indicators:
-                claims_conceded.append(f"Acknowledged bearish signals ({', '.join(bearish_indicators)}), but {len(bullish_indicators)} bullish indicator(s) dominate.")
-            if bullish_indicators:
-                claims_disputed.append(f"{len(bullish_indicators)} bullish indicator(s) contradict the opponent's {opponent_rating} thesis.")
-        elif signal == "bearish":
-            if bullish_indicators:
-                claims_conceded.append(f"Acknowledged bullish signals ({', '.join(bullish_indicators)}), but {len(bearish_indicators)} bearish indicator(s) dominate.")
-            if bearish_indicators:
-                claims_disputed.append(f"{len(bearish_indicators)} bearish indicator(s) contradict the opponent's {opponent_rating} thesis.")
-        else:
-            if bullish_indicators or bearish_indicators:
-                claims_conceded.append(f"Acknowledged mixed signals ({len(bullish_indicators)} bullish, {len(bearish_indicators)} bearish) which prevent a strong stance.")
-            claims_disputed.append("The overall lack of consensus among indicators contradicts any strong directional thesis.")
-    else:
-        debate_response = f"Maintaining {signal} stance based on {metrics_with_data} technical indicators."
-        claims_conceded = []
-        claims_disputed = []
-
-    weighting_statement = (
-        f"Horizon={selected_horizon}: momentum/oscillator signals weighted "
-        f"{'heavily' if selected_horizon == 'short' else 'less'} vs trend signals "
-        f"weighted {'heavily' if selected_horizon == 'long' else 'normally'}."
-    )
+    # --- Prepare return ---
 
     # --- Print result for visibility ---
     label = signal.upper()
@@ -315,20 +235,6 @@ def technical_node(state: BerkshireState):
                 "confidence": confidence,
                 "features": features,
                 "details": details,
-                "debate_response": (
-                    debate_response
-                    if is_debate_turn
-                    else f"Maintaining {signal} stance based on current technical indicators."
-                ),
-                "position_changed": position_changed,
-                "counterpoints_addressed": claims_disputed if is_debate_turn else [],
-                "claims_conceded": claims_conceded if is_debate_turn else [],
-                "claims_disputed": claims_disputed if is_debate_turn else [],
-                "final_position": {
-                    "rating": rating.value,
-                    "confidence": confidence,
-                },
-                "weighting_statement": weighting_statement if is_debate_turn else "",
                 "horizon_alignment_note": (
                     f"Technical signals prioritized for {horizon_label(selected_horizon)}: "
                     f"{'momentum/oscillators weighted heavily' if selected_horizon == 'short' else ''}"
