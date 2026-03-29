@@ -38,8 +38,10 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 OUTPUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cached_dataset.csv")
 
-# 50+ S&P 500 tickers across sectors
+# Tickers across market caps and sectors for broad generalization.
+# Large-cap (S&P 500), mid-cap (S&P 400), and small-cap (S&P 600 / Russell 2000).
 TICKERS = [
+    # --- Large-cap ---
     # Technology
     "AAPL", "MSFT", "GOOGL", "NVDA", "META", "AVGO", "ORCL", "CRM", "AMD", "INTC",
     # Financial Services
@@ -58,6 +60,46 @@ TICKERS = [
     "NEE", "DUK", "SO", "D",
     # Communication
     "DIS", "NFLX", "CMCSA", "T",
+
+    # --- Mid-cap ---
+    # Technology
+    "CRDO", "SMCI", "NET", "OKTA", "ZS",
+    # Financial Services
+    "EWBC", "FNB", "SF", "ALLY",
+    # Healthcare
+    "INSP", "HALO", "MEDP", "ITCI",
+    # Energy
+    "CTRA", "OVV", "SM", "MTDR",
+    # Consumer Cyclical
+    "DECK", "BURL", "WSM", "BOOT",
+    # Consumer Staples
+    "ELF", "CELH", "USFD", "SFM",
+    # Industrials
+    "AXON", "TDG", "BWXT", "RBC",
+    # Utilities
+    "NRG", "OGE", "PNW",
+    # Communication
+    "ROKU", "IART", "ZI",
+
+    # --- Small-cap ---
+    # Technology
+    "SLAB", "CEVA", "ARLO", "IONQ",
+    # Financial Services
+    "CUBI", "HOPE", "PPBI", "BY",
+    # Healthcare
+    "AMED", "GMED", "IRTC", "INVA",
+    # Energy
+    "GPOR", "REI", "NOG", "VTLE",
+    # Consumer Cyclical
+    "PLBY", "SHOO", "FOXF", "FLXS",
+    # Consumer Staples
+    "HAIN", "SMPL", "FRPT",
+    # Industrials
+    "KTOS", "ATKR", "AIMC", "GMS",
+    # Utilities
+    "AAON", "NWE", "UTL",
+    # Communication
+    "TBLA", "CARG", "DHC",
 ]
 
 def classify_return(forward_return: float, thresholds: tuple) -> str:
