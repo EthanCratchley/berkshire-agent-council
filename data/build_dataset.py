@@ -1,9 +1,9 @@
 """
-Build the cached training dataset for RF model training.
+Build the cached training dataset for RF/KNN model training.
 
 Fetches 2 years of historical data for 50+ S&P 500 tickers, computes
-all 16 features per trading day, labels with 5-day forward returns,
-and saves to data/cached_dataset.csv.
+all features per trading day, and labels with per-horizon forward returns
+(short/swing/long). Saves to data/cached_dataset.csv.
 """
 
 import os
@@ -26,6 +26,7 @@ from shared.feature_engineering import (
     compute_sentiment_features,
     compute_sector_features,
 )
+from shared.horizon import HORIZON_LABEL_CONFIG
 
 load_dotenv()
 
@@ -37,8 +38,10 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 OUTPUT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cached_dataset.csv")
 
-# 50+ S&P 500 tickers across sectors
+# Tickers across market caps and sectors for broad generalization.
+# Large-cap (S&P 500), mid-cap (S&P 400), and small-cap (S&P 600 / Russell 2000).
 TICKERS = [
+    # --- Large-cap ---
     # Technology
     "AAPL", "MSFT", "GOOGL", "NVDA", "META", "AVGO", "ORCL", "CRM", "AMD", "INTC",
     # Financial Services
@@ -57,29 +60,63 @@ TICKERS = [
     "NEE", "DUK", "SO", "D",
     # Communication
     "DIS", "NFLX", "CMCSA", "T",
+
+    # --- Mid-cap ---
+    # Technology
+    "CRDO", "SMCI", "NET", "OKTA", "ZS",
+    # Financial Services
+    "EWBC", "FNB", "SF", "ALLY",
+    # Healthcare
+    "INSP", "HALO", "MEDP", "ITCI",
+    # Energy
+    "CTRA", "OVV", "SM", "MTDR",
+    # Consumer Cyclical
+    "DECK", "BURL", "WSM", "BOOT",
+    # Consumer Staples
+    "ELF", "CELH", "USFD", "SFM",
+    # Industrials
+    "AXON", "TDG", "BWXT", "RBC",
+    # Utilities
+    "NRG", "OGE", "PNW",
+    # Communication
+    "ROKU", "IART", "ZI",
+
+    # --- Small-cap ---
+    # Technology
+    "SLAB", "CEVA", "ARLO", "IONQ",
+    # Financial Services
+    "CUBI", "HOPE", "PPBI", "BY",
+    # Healthcare
+    "AMED", "GMED", "IRTC", "INVA",
+    # Energy
+    "GPOR", "REI", "NOG", "VTLE",
+    # Consumer Cyclical
+    "PLBY", "SHOO", "FOXF", "FLXS",
+    # Consumer Staples
+    "HAIN", "SMPL", "FRPT",
+    # Industrials
+    "KTOS", "ATKR", "AIMC", "GMS",
+    # Utilities
+    "AAON", "NWE", "UTL",
+    # Communication
+    "TBLA", "CARG", "DHC",
 ]
 
-# 5-class label thresholds based on 5-day forward return
-LABEL_THRESHOLDS = [
-    (0.05, "STRONG BUY"),   # > +5%
-    (0.02, "BUY"),          # +2% to +5%
-    (-0.02, "HOLD"),        # -2% to +2%
-    (-0.05, "SELL"),        # -5% to -2%
-]
+def classify_return(forward_return: float, thresholds: tuple) -> str:
+    """Map a forward return to one of 5 class labels using the given thresholds.
 
-
-def classify_return(forward_return: float) -> str:
-    """Map a 5-day forward return to one of 5 class labels."""
-    if forward_return > 0.05:
+    thresholds: (strong_buy, buy, sell, strong_sell) boundaries.
+    """
+    strong_buy, buy, sell, strong_sell = thresholds
+    if forward_return > strong_buy:
         return "STRONG BUY"
-    elif forward_return > 0.02:
+    if forward_return > buy:
         return "BUY"
-    elif forward_return > -0.02:
+    if forward_return > sell:
         return "HOLD"
-    elif forward_return > -0.05:
+    if forward_return > strong_sell:
         return "SELL"
-    else:
-        return "STRONG SELL"
+    return "STRONG SELL"
 
 
 def fetch_fred_macro_series() -> pd.DataFrame:
@@ -142,8 +179,16 @@ def get_macro_for_date(macro_df: pd.DataFrame, date) -> dict:
 
 
 def build_ticker_data(ticker: str, macro_df: pd.DataFrame) -> list[dict]:
-    """Build feature rows for a single ticker."""
+    """Build feature rows for a single ticker with per-horizon labels."""
     rows = []
+
+    # Pre-compute horizon configs sorted by forward_days
+    horizon_configs = [
+        (name, cfg["forward_days"], cfg["thresholds"])
+        for name, cfg in HORIZON_LABEL_CONFIG.items()
+    ]
+    # Minimum forward window needed for at least the short-horizon label
+    min_forward = min(cfg["forward_days"] for cfg in HORIZON_LABEL_CONFIG.values())
 
     try:
         stock = yf.Ticker(ticker)
@@ -159,7 +204,6 @@ def build_ticker_data(ticker: str, macro_df: pd.DataFrame) -> list[dict]:
         except Exception:
             pass
 
-        # Fetch financials for fundamental features
         basic_financials = {}
         income_statement = {}
         balance_sheet = {}
@@ -179,7 +223,6 @@ def build_ticker_data(ticker: str, macro_df: pd.DataFrame) -> list[dict]:
         except Exception:
             pass
 
-        # Compute fundamental features once (static per ticker)
         fund_features = compute_fundamental_features(
             company_info=info,
             basic_financials=basic_financials,
@@ -188,35 +231,35 @@ def build_ticker_data(ticker: str, macro_df: pd.DataFrame) -> list[dict]:
             earnings_surprises=earnings_surprises,
         )
 
-        # Sentiment defaults (no historical LLM calls)
         sent_features = compute_sentiment_features(sentiment_score=5.0, news_volume=0)
 
-        # Sector one-hot encoding (static per ticker)
         sector = info.get("sector", "")
         sector_features = compute_sector_features(sector)
 
         dates = price_hist.index.tolist()
+        n = len(dates)
 
-        # Start from day 50 (need lookback for technical indicators)
-        # Stop 5 days before end (need forward return for label)
-        for i in range(50, len(dates) - 5):
+        # Need at least min_forward days of forward data for the shortest horizon
+        for i in range(50, n - min_forward):
             date = dates[i]
+            current_close = price_hist.iloc[i]["Close"]
 
-            # Technical features from price slice up to current day
+            # Compute per-horizon labels (None if not enough forward data)
+            labels = {}
+            for name, fwd_days, thresholds in horizon_configs:
+                if i + fwd_days < n:
+                    future_close = price_hist.iloc[i + fwd_days]["Close"]
+                    fwd_return = (future_close - current_close) / current_close
+                    labels[f"label_{name}"] = classify_return(fwd_return, thresholds)
+                else:
+                    labels[f"label_{name}"] = None
+
             price_slice = price_hist.iloc[: i + 1]
             tech_features = compute_technical_features(price_slice)
 
-            # Macro features for this date
             macro_indicators = get_macro_for_date(macro_df, date)
             macro_features = compute_macro_features(macro_indicators)
 
-            # 5-day forward return for label
-            current_close = price_hist.iloc[i]["Close"]
-            future_close = price_hist.iloc[i + 5]["Close"]
-            forward_return = (future_close - current_close) / current_close
-            label = classify_return(forward_return)
-
-            # Merge all features
             all_features = {}
             all_features.update(tech_features)
             all_features.update(sent_features)
@@ -230,7 +273,7 @@ def build_ticker_data(ticker: str, macro_df: pd.DataFrame) -> list[dict]:
             }
             for feat_name in FEATURE_ORDER:
                 row[feat_name] = all_features.get(feat_name)
-            row["label"] = label
+            row.update(labels)
 
             rows.append(row)
 
@@ -285,12 +328,15 @@ def build_dataset():
     df.to_csv(OUTPUT_PATH, index=False)
 
     # Summary
+    label_cols = [f"label_{h}" for h in HORIZON_LABEL_CONFIG]
     logger.info(f"\nDataset saved to {OUTPUT_PATH}")
     logger.info(f"Total samples: {len(df)}")
     logger.info(f"Tickers processed: {len(TICKERS) - len(failed_tickers)}/{len(TICKERS)}")
     if failed_tickers:
         logger.info(f"Failed tickers: {failed_tickers}")
-    logger.info(f"\nLabel distribution:\n{df['label'].value_counts().to_string()}")
+    for col in label_cols:
+        non_null = df[col].notna().sum()
+        logger.info(f"\n{col} distribution ({non_null} labeled rows):\n{df[col].value_counts().to_string()}")
     logger.info(f"\nFeature null counts:\n{df[FEATURE_ORDER].isnull().sum().to_string()}")
 
 

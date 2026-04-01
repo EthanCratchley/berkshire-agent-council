@@ -14,6 +14,25 @@ HORIZON_DAY_RANGES = {
     "long": (180, 730),
 }
 
+# Per-horizon labeling config for dataset building and model training.
+# forward_days: number of trading days to measure forward return
+# thresholds: (strong_buy, buy, sell, strong_sell) return boundaries
+#   Scaled roughly by sqrt(forward_days / 5) to reflect volatility scaling.
+HORIZON_LABEL_CONFIG = {
+    "short": {
+        "forward_days": 5,
+        "thresholds": (0.05, 0.02, -0.02, -0.05),
+    },
+    "swing": {
+        "forward_days": 35,
+        "thresholds": (0.12, 0.05, -0.05, -0.12),
+    },
+    "long": {
+        "forward_days": 180,
+        "thresholds": (0.25, 0.10, -0.10, -0.25),
+    },
+}
+
 HORIZON_ANALYST_WEIGHTS = {
     "short": {
         "sentiment": 1.35,
