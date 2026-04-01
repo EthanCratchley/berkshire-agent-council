@@ -130,3 +130,33 @@ def test_routes_to_macro_debate_node_when_macro_is_outlier():
     assert debate["status"] == "debating"
     assert debate["awaiting_response_from"] == "macro"
     assert debate["next_node"] == "macro_debate_node"
+
+
+def test_high_confidence_strong_buy_vs_hold_triggers_debate():
+    state = _state_with_signals(
+        {
+            "sentiment": {"rating": "strong_buy", "confidence": 0.9, "details": ""},
+            "fundamental": {"rating": "hold", "confidence": 0.8, "details": ""},
+            "technical": {"rating": "buy", "confidence": 0.7, "details": ""},
+            "macro": {"rating": "buy", "confidence": 0.7, "details": ""},
+        }
+    )
+    result = orchestrator(state)
+    debate = result["debate"]
+    assert debate["status"] == "debating"
+    assert debate["active_challenge"]["id"] == "fundamental_vs_sentiment"
+
+
+def test_low_confidence_large_distance_does_not_trigger_debate():
+    state = _state_with_signals(
+        {
+            "sentiment": {"rating": "strong_buy", "confidence": 0.29, "details": ""},
+            "fundamental": {"rating": "strong_sell", "confidence": 0.95, "details": ""},
+            "technical": {"rating": "hold", "confidence": 0.6, "details": ""},
+            "macro": {"rating": "hold", "confidence": 0.6, "details": ""},
+        }
+    )
+    result = orchestrator(state)
+    debate = result["debate"]
+    assert debate["status"] == "resolved"
+    assert debate["next_node"] == "synthesizer_node"

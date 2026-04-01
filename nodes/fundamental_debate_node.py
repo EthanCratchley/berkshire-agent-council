@@ -191,10 +191,12 @@ Return ONLY valid JSON:
 """
 
     try:
-        if ChatGoogleGenerativeAI is not None:
+        api_key = os.getenv("GOOGLE_API_KEY")
+        is_debate_turn = awaiting == "fundamental" and bool(active)
+        if ChatGoogleGenerativeAI is not None and api_key and is_debate_turn:
             llm = ChatGoogleGenerativeAI(
                 model="gemini-2.5-flash",
-                google_api_key=os.getenv("GOOGLE_API_KEY"),
+                google_api_key=api_key,
             )
             response = llm.invoke(prompt)
             raw = _clean_json_text(response.content)
@@ -230,8 +232,8 @@ Return ONLY valid JSON:
                     f"because the core financial metrics still support it."
                 )
     except Exception as e:
-        explanation = f"{explanation} LLM refinement unavailable: {str(e)}"
-        debate_response = f"LLM unavailable; maintaining quant stance. ({str(e)})"
+        explanation = f"{explanation} LLM refinement unavailable."
+        debate_response = "Maintaining stance from quantitative fundamentals due to unavailable LLM refinement."
         weighting_statement = ""
 
     # Guardrail: avoid incoherent phrasing that treats non-fundamental opponent as fundamental.

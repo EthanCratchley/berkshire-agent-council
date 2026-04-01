@@ -5,9 +5,10 @@ from shared.state_schema import BerkshireState, make_initial_debate_state
 from shared.stance import parse_rating, rating_to_score
 
 
-HIGH_CONFIDENCE_THRESHOLD = 0.55
 EFFECTIVE_CONFIDENCE_THRESHOLD = 0.30
 STAGNATION_LIMIT = 2
+MIN_CONTRADICTION_DISTANCE = 2
+MIN_CONTRADICTION_SEVERITY = 1.0
 ANALYST_ORDER = ["sentiment", "fundamental", "technical", "macro"]
 
 
@@ -139,15 +140,19 @@ def _find_contradictions(signal_snapshots: dict) -> list:
 
     for a_name, b_name in combinations(names, 2):
         a, b = signal_snapshots[a_name], signal_snapshots[b_name]
-        if a["score_sign"] * b["score_sign"] != -1:
+        if min(a["confidence"], b["confidence"]) < EFFECTIVE_CONFIDENCE_THRESHOLD:
             continue
-        if a["confidence"] < HIGH_CONFIDENCE_THRESHOLD or b["confidence"] < HIGH_CONFIDENCE_THRESHOLD:
+
+        score_distance = abs(a["stance_score"] - b["stance_score"])
+        if score_distance < MIN_CONTRADICTION_DISTANCE:
+            continue
+
+        severity = round(score_distance * min(a["confidence"], b["confidence"]), 2)
+        if severity < MIN_CONTRADICTION_SEVERITY:
             continue
 
         target, opponent = _pick_target_for_pair(a_name, b_name, signal_snapshots, outlier_scores)
         coalition = _build_coalition_context(target, opponent, signal_snapshots)
-        score_distance = abs(a["stance_score"] - b["stance_score"])
-        severity = round(score_distance * min(a["confidence"], b["confidence"]), 2)
 
         contradictions.append(
             {
@@ -196,14 +201,38 @@ def _next_missing_analyst(signal_snapshots: dict):
 
 
 def _signature_for_pair(challenge: dict, signal_snapshots: dict):
+    def _normalize_text(text: str, limit: int = 160) -> str:
+        cleaned = " ".join(str(text or "").strip().lower().split())
+        return cleaned[:limit]
+
+    def _list_sig(values) -> tuple:
+        if not isinstance(values, list):
+            return ()
+        normalized = sorted({_normalize_text(v, limit=80) for v in values if str(v or "").strip()})
+        return tuple(normalized[:6])
+
+    def _snap_sig(snap: dict):
+        conf_raw = snap.get("confidence", 0.0)
+        try:
+            conf = float(conf_raw)
+        except (TypeError, ValueError):
+            conf = 0.0
+        conf_bucket = round(conf / 0.05) * 0.05
+        return (
+            snap.get("rating"),
+            round(conf_bucket, 2),
+            _normalize_text(snap.get("weighting_statement", ""), limit=140),
+            _list_sig(snap.get("claims_conceded", [])),
+            _list_sig(snap.get("claims_disputed", [])),
+            _normalize_text(snap.get("debate_response", ""), limit=160),
+        )
+
     a, b = challenge["pair"][0], challenge["pair"][1]
     snap_a = signal_snapshots.get(a, {})
     snap_b = signal_snapshots.get(b, {})
     return (
-        snap_a.get("rating"),
-        round(float(snap_a.get("confidence", 0.0)), 2),
-        snap_b.get("rating"),
-        round(float(snap_b.get("confidence", 0.0)), 2),
+        _snap_sig(snap_a),
+        _snap_sig(snap_b),
     )
 
 

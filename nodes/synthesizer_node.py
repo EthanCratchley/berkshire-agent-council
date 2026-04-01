@@ -21,6 +21,9 @@ load_dotenv()
 EFFECTIVE_CONTRIBUTOR_CONFIDENCE = 0.30
 MIN_EFFECTIVE_CONTRIBUTORS = 3
 MIN_EFFECTIVE_FOR_STRONG = 2
+MIN_EFFECTIVE_FOR_DIRECTIONAL = 2
+HIGH_UNRESOLVED_SEVERITY = 1.5
+VERY_HIGH_UNRESOLVED_SEVERITY = 2.5
 
 
 def _rating_from_weighted_score(weighted_score: float) -> str:
@@ -46,6 +49,32 @@ def _apply_coverage_gate(final_rating: str, effective_contributors: int) -> str:
     if final_rating == "strong_sell":
         return "sell"
     return final_rating
+
+
+def _downgrade_one_step(rating: str) -> str:
+    if rating == "strong_buy":
+        return "buy"
+    if rating == "buy":
+        return "hold"
+    if rating == "strong_sell":
+        return "sell"
+    if rating == "sell":
+        return "hold"
+    return rating
+
+
+def _extract_unresolved_severity(unresolved: list) -> float:
+    severities = []
+    for entry in unresolved or []:
+        if not isinstance(entry, dict):
+            continue
+        challenge = entry.get("challenge", {}) if isinstance(entry.get("challenge"), dict) else {}
+        sev = challenge.get("severity")
+        try:
+            severities.append(float(sev))
+        except (TypeError, ValueError):
+            continue
+    return max(severities) if severities else 0.0
 
 
 def _clean_json_text(raw: str) -> str:
@@ -110,7 +139,41 @@ def synthesizer_node(state: BerkshireState):
     weighted_score = (weighted_sum / total_weight) if total_weight > 0 else 0.0
     raw_final_rating = _rating_from_weighted_score(weighted_score)
     final_rating = _apply_coverage_gate(raw_final_rating, effective_contributors)
+    coverage_gate_applied = final_rating != raw_final_rating
+    coverage_gated_rating = final_rating
     unresolved = debate.get("unresolved_contradictions", [])
+    highest_unresolved_severity = _extract_unresolved_severity(unresolved)
+    reliability_notes = []
+
+    if (
+        effective_contributors < MIN_EFFECTIVE_FOR_DIRECTIONAL
+        and final_rating in {"buy", "sell", "strong_buy", "strong_sell"}
+    ):
+        prior = final_rating
+        final_rating = _downgrade_one_step(final_rating)
+        reliability_notes.append(
+            f"Directional call softened from {prior} to {final_rating} because effective contributor count "
+            f"is below {MIN_EFFECTIVE_FOR_DIRECTIONAL}."
+        )
+
+    if highest_unresolved_severity >= HIGH_UNRESOLVED_SEVERITY:
+        prior = final_rating
+        final_rating = _downgrade_one_step(final_rating)
+        if final_rating != prior:
+            reliability_notes.append(
+                f"Unresolved contradiction severity ({highest_unresolved_severity:.2f}) reduced conviction "
+                f"from {prior} to {final_rating}."
+            )
+    if (
+        highest_unresolved_severity >= VERY_HIGH_UNRESOLVED_SEVERITY
+        and final_rating in {"buy", "sell"}
+        and abs(weighted_score) < 1.1
+    ):
+        reliability_notes.append(
+            "Severe unresolved disagreement plus moderate weighted score forced a neutral hold recommendation."
+        )
+        final_rating = "hold"
+
     transcript = []
     conversation_lines = []
     for event in debate.get("history", []):
@@ -153,12 +216,14 @@ def synthesizer_node(state: BerkshireState):
             f"{EFFECTIVE_CONTRIBUTOR_CONFIDENCE:.2f}; recommendation reliability may be reduced."
         )
         rationale = f"{rationale} {coverage_warning}"
-    if final_rating != raw_final_rating:
+    if coverage_gate_applied:
         rationale = (
-            f"{rationale} Rating was capped from {raw_final_rating} to {final_rating} due to "
+            f"{rationale} Rating was capped from {raw_final_rating} to {coverage_gated_rating} due to "
             f"low effective coverage (< {MIN_EFFECTIVE_FOR_STRONG} analysts with confidence >= "
             f"{EFFECTIVE_CONTRIBUTOR_CONFIDENCE:.2f})."
         )
+    if reliability_notes:
+        rationale = f"{rationale} {' '.join(reliability_notes)}"
 
     ranked_contributors = sorted(
         analyst_breakdown,
@@ -245,9 +310,9 @@ def synthesizer_node(state: BerkshireState):
     print(f"Ticker: {ticker}")
     print(f"Horizon: {selected_horizon_label}")
     print(f"Recommendation: {final_rating}")
-    if final_rating != raw_final_rating:
+    if coverage_gate_applied:
         print(
-            f"Coverage gate applied: {raw_final_rating} -> {final_rating} "
+            f"Coverage gate applied: {raw_final_rating} -> {coverage_gated_rating} "
             f"(effective contributors: {effective_contributors})"
         )
     print(f"Weighted score: {weighted_score:.3f}")
@@ -272,11 +337,13 @@ def synthesizer_node(state: BerkshireState):
             "effective_contributors": effective_contributors,
             "effective_contributor_threshold": EFFECTIVE_CONTRIBUTOR_CONFIDENCE,
             "coverage_warning": coverage_warning,
+            "reliability_notes": reliability_notes,
             "analyst_breakdown": analyst_breakdown,
             "debate_transcript": transcript,
             "debate_conversation": conversation_lines,
             "debate_conversation_text": "\n".join(conversation_lines),
             "unresolved_contradictions": unresolved,
+            "highest_unresolved_severity": round(highest_unresolved_severity, 3),
             "rationale": rationale,
             "detailed_narrative": detailed_narrative,
             "summary_sections": {

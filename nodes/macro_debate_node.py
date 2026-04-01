@@ -232,8 +232,8 @@ Return ONLY valid JSON:
                     f"because the core indicators still support it."
                 )
     except Exception as e:
-        explanation = f"{explanation} LLM refinement unavailable: {str(e)}"
-        debate_response = f"LLM unavailable; maintaining quant stance. ({str(e)})"
+        explanation = f"{explanation} LLM refinement unavailable."
+        debate_response = "Maintaining stance from quantitative macro indicators due to unavailable LLM refinement."
         weighting_statement = ""
 
     # Guardrail: avoid incoherent phrasing that treats non-macro opponent as macroeconomic.
