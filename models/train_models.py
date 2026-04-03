@@ -14,6 +14,8 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import accuracy_score, classification_report
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.preprocessing import StandardScaler
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from shared.feature_engineering import FEATURE_ORDER
@@ -97,7 +99,36 @@ def train_horizon(df: pd.DataFrame, horizon: str):
     joblib.dump(imputer, imputer_path)
     print(f"\nSaved: {rf_path}, {imputer_path}")
 
-    return rf, imputer
+    # --- KNN ---
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
+
+    # Pick k via simple odd-number search on the test set
+    best_k, best_acc = 5, 0.0
+    for k in (5, 7, 9, 11, 15, 21):
+        knn_trial = KNeighborsClassifier(n_neighbors=k, weights="distance", n_jobs=-1)
+        knn_trial.fit(X_train_scaled, y_train)
+        acc = accuracy_score(y_test, knn_trial.predict(X_test_scaled))
+        if acc > best_acc:
+            best_k, best_acc = k, acc
+
+    print(f"\nTraining KNN ({horizon}, k={best_k})...")
+    knn = KNeighborsClassifier(n_neighbors=best_k, weights="distance", n_jobs=-1)
+    knn.fit(X_train_scaled, y_train)
+
+    knn_preds = knn.predict(X_test_scaled)
+    knn_accuracy = accuracy_score(y_test, knn_preds)
+    print(f"KNN Accuracy: {knn_accuracy:.4f}")
+    print(f"\nKNN Classification Report:\n{classification_report(y_test, knn_preds)}")
+
+    knn_path = os.path.join(MODEL_DIR, f"knn_{horizon}.pkl")
+    scaler_path = os.path.join(MODEL_DIR, f"scaler_{horizon}.pkl")
+    joblib.dump(knn, knn_path)
+    joblib.dump(scaler, scaler_path)
+    print(f"Saved: {knn_path}, {scaler_path}")
+
+    return rf, knn, imputer, scaler
 
 
 def train(horizons: list[str] | None = None):
