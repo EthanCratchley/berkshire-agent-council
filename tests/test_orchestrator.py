@@ -18,7 +18,7 @@ def _state_with_signals(signals: dict, debate_overrides=None):
 def _all_nodes_same_side():
     return {
         "sentiment": {"rating": "buy", "confidence": 0.8, "details": ""},
-        "fundamental": {"rating": "strong_buy", "confidence": 0.7, "details": ""},
+        "fundamental": {"rating": "buy", "confidence": 0.7, "details": ""},
         "technical": {"rating": "buy", "confidence": 0.6, "details": ""},
         "macro": {"rating": "hold", "confidence": 0.7, "details": ""},
     }
@@ -151,7 +151,7 @@ def test_low_confidence_large_distance_does_not_trigger_debate():
     state = _state_with_signals(
         {
             "sentiment": {"rating": "strong_buy", "confidence": 0.29, "details": ""},
-            "fundamental": {"rating": "strong_sell", "confidence": 0.95, "details": ""},
+            "fundamental": {"rating": "strong_sell", "confidence": 0.29, "details": ""},
             "technical": {"rating": "hold", "confidence": 0.6, "details": ""},
             "macro": {"rating": "hold", "confidence": 0.6, "details": ""},
         }

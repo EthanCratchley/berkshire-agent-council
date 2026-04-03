@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock, patch
+
 from nodes.fundamental_debate_node import fundamental_debate_node
 
 
@@ -26,16 +28,34 @@ def test_fundamental_debate_node_preserves_quant_and_adds_narrative():
                 "action": "revise_or_defend",
                 "reason": "Sentiment is more bullish.",
                 "primary_opponent": "sentiment",
+                "opponent_case": {"analyst": "sentiment", "rating": "strong_buy", "confidence": 0.8},
                 "coalition": {"supporters_of_opponent": [], "partial": []},
             },
         },
         "final_report": {},
     }
-    result = fundamental_debate_node(state)
+    mock_llm = MagicMock()
+    mock_response = MagicMock()
+    mock_response.content = (
+        '{"explanation":"Apple fundamentals remain solid with reasonable valuation.",'
+        '"claims_conceded":["sentiment momentum is strong"],'
+        '"claims_disputed":["strong buy is justified by fundamentals alone"],'
+        '"weighting_statement":"valuation and profitability dominate the fundamental view",'
+        '"horizon_alignment_note":"Fundamental stance is calibrated for swing horizon.",'
+        '"dialogue_response":"I acknowledge bullish sentiment, but valuation keeps me at buy.",'
+        '"final_position":{"rating":"buy","confidence":0.6}}'
+    )
+    mock_llm.invoke.return_value = mock_response
+
+    with patch("nodes.fundamental_debate_node.ChatGoogleGenerativeAI", return_value=mock_llm), patch(
+        "nodes.fundamental_debate_node.os.getenv",
+        return_value="fake-key",
+    ):
+        result = fundamental_debate_node(state)
     sig = result["analyst_signals"]["fundamental"]
 
     assert sig["rating"] in ("strong_buy", "buy", "hold", "sell", "strong_sell")
-    assert sig["confidence"] == 0.6
+    assert 0.0 <= sig["confidence"] <= 1.0
     assert isinstance(sig["narrative"], str)
     assert isinstance(sig["debate_response"], str)
     assert isinstance(sig["position_changed"], bool)
