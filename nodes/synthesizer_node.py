@@ -245,9 +245,12 @@ def synthesizer_node(state: BerkshireState):
         f"The analysts debated under {selected_horizon_label}. "
         f"{'At least one contradiction remained unresolved.' if unresolved else 'The debate converged without unresolved contradictions.'}"
     )
+    rf_label = classical_rf["prediction"] if classical_rf else "N/A"
+    knn_label = classical_knn["prediction"] if classical_knn else "N/A"
     section_2_decision = (
-        f"The final rating is {final_rating} with weighted score {weighted_score:.3f}. "
-        f"The strongest contributors were {top_contributors}."
+        f"The LLM debate rating is {final_rating} with weighted score {weighted_score:.3f}. "
+        f"The Random Forest predicts {rf_label} and KNN predicts {knn_label}. "
+        f"The strongest debate contributors were {top_contributors}."
     )
     section_3_risks = (
         f"{coverage_warning if coverage_warning else 'No major coverage warning was triggered.'} "
@@ -267,20 +270,31 @@ def synthesizer_node(state: BerkshireState):
                 model="gemini-2.5-flash",
                 google_api_key=os.getenv("GOOGLE_API_KEY"),
             )
+            rf_summary = f"Random Forest prediction: {classical_rf['prediction']}" if classical_rf else "Random Forest: not available"
+            knn_summary = f"KNN prediction: {classical_knn['prediction']}" if classical_knn else "KNN: not available"
+            models_agree = (
+                classical_rf and classical_knn
+                and classical_rf["prediction"] == classical_knn["prediction"]
+            )
             prompt = (
                 "You are the final portfolio synthesis analyst. "
                 "Explain this stock recommendation in clear natural language for a non-expert user.\n\n"
                 f"Ticker: {ticker}\n"
                 f"Horizon: {selected_horizon_label}\n"
-                f"Final recommendation: {final_rating}\n"
+                f"LLM debate recommendation: {final_rating}\n"
+                f"{rf_summary}\n"
+                f"{knn_summary}\n"
+                f"Classical models agree with each other: {models_agree}\n"
                 f"Weighted score: {weighted_score:.3f}\n"
                 f"Coverage warning: {coverage_warning or 'none'}\n"
                 f"Unresolved contradictions: {len(unresolved)}\n"
                 f"Analyst breakdown: {analyst_breakdown}\n"
                 f"Debate conversation: {conversation_lines}\n\n"
+                "Consider all three models (LLM debate, Random Forest, KNN) when writing the summary. "
+                "If the models disagree, note the divergence and what it might mean for confidence.\n\n"
                 "Return ONLY valid JSON with keys:\n"
                 '{"section_1_debate":"<2-4 sentences on key debate outcomes>",'
-                '"section_2_decision":"<2-4 sentences on why final recommendation was selected>",'
+                '"section_2_decision":"<2-4 sentences on why final recommendation was selected, referencing all 3 models>",'
                 '"section_3_risks":"<2-4 sentences on uncertainty and risks for this horizon>",'
                 '"key_drivers":["<driver 1>","<driver 2>"],'
                 '"uncertainties":["<uncertainty 1>","<uncertainty 2>"]}'
