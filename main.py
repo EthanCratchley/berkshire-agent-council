@@ -148,12 +148,15 @@ if __name__ == "__main__":
         final_report = final_state.get("final_report", {})
         if final_report:
             print(f"Horizon: {final_report.get('horizon_label', horizon_label(selected_horizon))}")
-            print(f"LLM Debate Recommendation: {final_report.get('recommendation', 'N/A')}")
+            vote = final_report.get("vote", {})
+            print(f"Final Recommendation: {final_report.get('recommendation', 'N/A').upper()}"
+                  f"  ({vote.get('method', '?')}, {vote.get('agreement', '?')})")
+            print(f"  LLM Debate:    {final_report.get('llm_recommendation', 'N/A')}")
             cm = final_report.get("classical_models", {})
             if cm.get("rf"):
-                print(f"Random Forest Prediction:  {cm['rf'].get('prediction', 'N/A')}")
+                print(f"  Random Forest: {cm['rf'].get('prediction', 'N/A')}")
             if cm.get("knn"):
-                print(f"KNN Prediction:            {cm['knn'].get('prediction', 'N/A')}")
+                print(f"  KNN:           {cm['knn'].get('prediction', 'N/A')}")
             print(f"Rationale: {final_report.get('rationale', 'No rationale generated.')}")
             detailed_narrative = final_report.get("detailed_narrative", "")
             if detailed_narrative:

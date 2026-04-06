@@ -12,9 +12,11 @@ try:
 except ImportError:
     ChatGoogleGenerativeAI = None
 
+from collections import Counter
+
 from shared.state_schema import BerkshireState
 from shared.horizon import normalize_horizon, horizon_label, analyst_weights_for_horizon
-from shared.stance import parse_rating, rating_to_score
+from shared.stance import Rating, parse_rating, rating_to_score
 
 load_dotenv()
 
@@ -75,6 +77,76 @@ def _extract_unresolved_severity(unresolved: list) -> float:
         except (TypeError, ValueError):
             continue
     return max(severities) if severities else 0.0
+
+
+def _score_to_rating(score: float) -> str:
+    if score >= 1.5:
+        return "strong_buy"
+    if score >= 0.5:
+        return "buy"
+    if score <= -1.5:
+        return "strong_sell"
+    if score <= -0.5:
+        return "sell"
+    return "hold"
+
+
+def three_way_vote(llm_rating: str, rf_prediction, knn_prediction) -> dict:
+    """
+    Combine LLM debate, RF, and KNN into a single voted recommendation.
+
+    Strategy:
+    1. If 2+ models agree on the exact rating, that's the consensus.
+    2. If all three disagree, average their scores and map back.
+
+    Returns a dict with the voted recommendation and metadata.
+    """
+    votes = []
+
+    llm_parsed = parse_rating(llm_rating)
+    if llm_parsed is not None:
+        votes.append(("llm", llm_parsed))
+
+    if rf_prediction is not None:
+        rf_parsed = parse_rating(rf_prediction)
+        if rf_parsed is not None:
+            votes.append(("rf", rf_parsed))
+
+    if knn_prediction is not None:
+        knn_parsed = parse_rating(knn_prediction)
+        if knn_parsed is not None:
+            votes.append(("knn", knn_parsed))
+
+    if not votes:
+        return {
+            "consensus": "hold",
+            "method": "no_votes",
+            "agreement": "none",
+            "votes": {},
+        }
+
+    vote_map = {name: r.value for name, r in votes}
+    ratings = [r for _, r in votes]
+    counts = Counter(r.value for r in ratings)
+    most_common, most_count = counts.most_common(1)[0]
+
+    if len(votes) == 1 or most_count >= 2:
+        return {
+            "consensus": most_common,
+            "method": "majority",
+            "agreement": "unanimous" if most_count == len(votes) else "majority",
+            "votes": vote_map,
+        }
+
+    # All disagree — average scores
+    avg_score = sum(rating_to_score(r) for r in ratings) / len(ratings)
+    return {
+        "consensus": _score_to_rating(avg_score),
+        "method": "score_average",
+        "agreement": "split",
+        "average_score": round(avg_score, 3),
+        "votes": vote_map,
+    }
 
 
 def _clean_json_text(raw: str) -> str:
@@ -181,6 +253,12 @@ def synthesizer_node(state: BerkshireState):
         )
         final_rating = "hold"
 
+    # --- 3-way comparison vote ---
+    rf_pred = classical_rf.get("prediction") if classical_rf else None
+    knn_pred = classical_knn.get("prediction") if classical_knn else None
+    vote = three_way_vote(final_rating, rf_pred, knn_pred)
+    voted_recommendation = vote["consensus"]
+
     transcript = []
     conversation_lines = []
     for event in debate.get("history", []):
@@ -207,13 +285,14 @@ def synthesizer_node(state: BerkshireState):
 
     if unresolved:
         rationale = (
-            f"Final recommendation is {final_rating} with unresolved analyst disagreements "
+            f"Voted recommendation is {voted_recommendation} ({vote['method']}, {vote['agreement']}) "
+            f"with unresolved analyst disagreements "
             f"({len(unresolved)} contradiction(s)) for {selected_horizon_label}."
         )
     else:
         rationale = (
-            f"Final recommendation is {final_rating} with no unresolved contradictions "
-            f"for {selected_horizon_label}."
+            f"Voted recommendation is {voted_recommendation} ({vote['method']}, {vote['agreement']}) "
+            f"with no unresolved contradictions for {selected_horizon_label}."
         )
 
     coverage_warning = ""
@@ -330,11 +409,12 @@ def synthesizer_node(state: BerkshireState):
     print("\n---FINAL SYNTHESIS ---")
     print(f"Ticker: {ticker}")
     print(f"Horizon: {selected_horizon_label}")
-    print(f"LLM Debate Recommendation: {final_rating}")
+    print(f"LLM Debate:   {final_rating}")
     if classical_rf:
-        print(f"Random Forest Prediction:  {classical_rf.get('prediction', 'N/A')}")
+        print(f"Random Forest: {classical_rf.get('prediction', 'N/A')}")
     if classical_knn:
-        print(f"KNN Prediction:            {classical_knn.get('prediction', 'N/A')}")
+        print(f"KNN:           {classical_knn.get('prediction', 'N/A')}")
+    print(f"Voted Recommendation: {voted_recommendation.upper()} ({vote['method']}, {vote['agreement']})")
     if coverage_gate_applied:
         print(
             f"Coverage gate applied: {raw_final_rating} -> {coverage_gated_rating} "
@@ -356,8 +436,10 @@ def synthesizer_node(state: BerkshireState):
             "horizon": selected_horizon,
             "horizon_label": selected_horizon_label,
             "horizon_weights": analyst_weights,
-            "recommendation": final_rating,
+            "recommendation": voted_recommendation,
+            "llm_recommendation": final_rating,
             "raw_recommendation": raw_final_rating,
+            "vote": vote,
             "weighted_score": round(weighted_score, 3),
             "effective_contributors": effective_contributors,
             "effective_contributor_threshold": EFFECTIVE_CONTRIBUTOR_CONFIDENCE,
