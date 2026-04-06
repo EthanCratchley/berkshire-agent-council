@@ -14,6 +14,7 @@ from nodes.macro_econ_node import macro_econ_node
 from nodes.macro_debate_node import macro_debate_node
 from nodes.technical_debate_node import technical_debate_node
 from nodes.synthesizer_node import synthesizer_node
+from nodes.classical_models_node import classical_models_node
 from orchestration.orchestrator import orchestrator
 
 
@@ -40,10 +41,10 @@ def route_from_orchestrator(state: BerkshireState):
         "technical_debate_node",
         "macro_econ_node",
         "macro_debate_node",
-        "synthesizer_node",
     }:
         return next_node
-    return "synthesizer_node"
+    # When debate is done, run classical models before synthesis.
+    return "classical_models_node"
 
 
 def prompt_for_horizon() -> str:
@@ -66,6 +67,7 @@ workflow.add_node("technical_debate_node", technical_debate_node)
 workflow.add_node("macro_econ_node", macro_econ_node)
 workflow.add_node("macro_debate_node", macro_debate_node)
 workflow.add_node("orchestrator", orchestrator)
+workflow.add_node("classical_models_node", classical_models_node)
 workflow.add_node("synthesizer_node", synthesizer_node)
 
 # Data loading first, then orchestrator controls the full flow.
@@ -81,7 +83,8 @@ workflow.add_edge("technical_debate_node", "orchestrator")
 workflow.add_edge("macro_econ_node", "orchestrator")
 workflow.add_edge("macro_debate_node", "orchestrator")
 
-# Final synthesis exits.
+# Classical models run, then synthesis exits.
+workflow.add_edge("classical_models_node", "synthesizer_node")
 workflow.add_edge("synthesizer_node", END)
 
 workflow.add_conditional_edges(
@@ -95,7 +98,7 @@ workflow.add_conditional_edges(
         "technical_debate_node": "technical_debate_node",
         "macro_econ_node": "macro_econ_node",
         "macro_debate_node": "macro_debate_node",
-        "synthesizer_node": "synthesizer_node",
+        "classical_models_node": "classical_models_node",
     },
 )
 
@@ -145,7 +148,12 @@ if __name__ == "__main__":
         final_report = final_state.get("final_report", {})
         if final_report:
             print(f"Horizon: {final_report.get('horizon_label', horizon_label(selected_horizon))}")
-            print(f"Final Recommendation: {final_report.get('recommendation', 'N/A')}")
+            print(f"LLM Debate Recommendation: {final_report.get('recommendation', 'N/A')}")
+            cm = final_report.get("classical_models", {})
+            if cm.get("rf"):
+                print(f"Random Forest Prediction:  {cm['rf'].get('prediction', 'N/A')}")
+            if cm.get("knn"):
+                print(f"KNN Prediction:            {cm['knn'].get('prediction', 'N/A')}")
             print(f"Rationale: {final_report.get('rationale', 'No rationale generated.')}")
             detailed_narrative = final_report.get("detailed_narrative", "")
             if detailed_narrative:

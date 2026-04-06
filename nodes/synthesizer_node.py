@@ -99,12 +99,19 @@ def synthesizer_node(state: BerkshireState):
     signals = state.get("analyst_signals", {})
     debate = state.get("debate", {})
 
+    # Extract classical model predictions before analyst loop.
+    classical = signals.get("classical_models", {})
+    classical_rf = classical.get("rf") if isinstance(classical, dict) else None
+    classical_knn = classical.get("knn") if isinstance(classical, dict) else None
+
     weighted_sum = 0.0
     total_weight = 0.0
     analyst_breakdown = []
     effective_contributors = 0
 
     for analyst, payload in signals.items():
+        if analyst == "classical_models":
+            continue
         if not isinstance(payload, dict):
             continue
         rating = parse_rating(payload.get("rating"))
@@ -309,7 +316,11 @@ def synthesizer_node(state: BerkshireState):
     print("\n---FINAL SYNTHESIS ---")
     print(f"Ticker: {ticker}")
     print(f"Horizon: {selected_horizon_label}")
-    print(f"Recommendation: {final_rating}")
+    print(f"LLM Debate Recommendation: {final_rating}")
+    if classical_rf:
+        print(f"Random Forest Prediction:  {classical_rf.get('prediction', 'N/A')}")
+    if classical_knn:
+        print(f"KNN Prediction:            {classical_knn.get('prediction', 'N/A')}")
     if coverage_gate_applied:
         print(
             f"Coverage gate applied: {raw_final_rating} -> {coverage_gated_rating} "
@@ -353,6 +364,10 @@ def synthesizer_node(state: BerkshireState):
             },
             "narrative_key_drivers": narrative_key_drivers,
             "narrative_uncertainties": narrative_uncertainties,
+            "classical_models": {
+                "rf": classical_rf,
+                "knn": classical_knn,
+            },
         },
         "debate": {
             "status": "completed",
