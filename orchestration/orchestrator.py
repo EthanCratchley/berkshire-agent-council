@@ -383,7 +383,7 @@ def orchestrator(state: BerkshireState):
         }
 
     round_no = int(debate.get("round", 0))
-    max_rounds = int(debate.get("max_rounds", 3))
+    max_rounds = int(debate.get("max_rounds", 5))
     pair_stagnation = dict(debate.get("pair_stagnation", {}) or {})
     pair_last_signature = dict(debate.get("pair_last_signature", {}) or {})
     active_prev = debate.get("active_challenge", {}) if isinstance(debate.get("active_challenge"), dict) else {}

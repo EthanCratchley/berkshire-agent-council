@@ -53,7 +53,7 @@ def read_only_data(existing_data: dict, new_data: dict) -> dict:
     return new_data
 
 
-def make_initial_debate_state(max_rounds: int = 3) -> dict:
+def make_initial_debate_state(max_rounds: int = 5) -> dict:
     """
     Build the initial debate metadata used by the orchestrator loop.
     """
