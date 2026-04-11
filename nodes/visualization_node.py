@@ -364,12 +364,14 @@ def _save_model_comparison_chart(output_path: str, final_report: dict, ticker: s
 
     for idx, row in enumerate(rows):
         ax.text(
-            row["score"] + (0.08 if row["score"] >= 0 else -0.08),
+            row["score"] + (-0.05 if row["score"] >= 0 else 0.05),
             idx,
             row["rating"],
             va="center",
-            ha="left" if row["score"] >= 0 else "right",
+            ha="right" if row["score"] >= 0 else "left",
             fontsize=9,
+            color="white",
+            fontweight="bold",
         )
 
     fig.tight_layout()
