@@ -62,3 +62,63 @@ def test_technical_debate_node_preserves_quant_and_adds_narrative():
     assert isinstance(sig["position_changed"], bool)
     assert isinstance(sig["counterpoints_addressed"], list)
     assert "Technical explanation" in sig["details"]
+    assert "deterministic_decision" in sig
+
+
+def test_technical_debate_deterministic_policy_not_overridden_by_llm():
+    state = {
+        "ticker": "AAPL",
+        "horizon": "short",
+        "data": {},
+        "analyst_signals": {
+            "technical": {
+                "rating": "hold",
+                "confidence": 0.42,
+                "features": {
+                    "rsi": 58.0,
+                    "macd_histogram": 0.2,
+                    "sma_20_50_cross": 0,
+                    "bollinger_pct": 0.82,
+                    "volume_ratio": 0.71,
+                    "price_change_5d": 0.10,
+                    "price_change_20d": -0.01,
+                },
+                "details": "Baseline technical stance.",
+            }
+        },
+        "debate": {
+            "awaiting_response_from": "technical",
+            "active_challenge": {
+                "id": "technical_vs_fundamental",
+                "severity": 1.2,
+                "action": "revise_or_defend",
+                "reason": "Fundamental is more bullish.",
+                "opponent_case": {"analyst": "fundamental", "rating": "strong_buy", "confidence": 0.65},
+                "coalition": {"supporters_of_opponent": [], "partial": []},
+            },
+        },
+        "final_report": {},
+    }
+
+    mock_llm = MagicMock()
+    mock_response = MagicMock()
+    mock_response.content = (
+        '{"explanation":"Technical signals are mixed with no clear breakout.",'
+        '"claims_conceded":["fundamental growth is strong"],'
+        '"claims_disputed":["price action confirms strong_buy"],'
+        '"weighting_statement":"mixed momentum indicators reduce conviction",'
+        '"horizon_alignment_note":"Short-horizon technical setup remains noisy.",'
+        '"dialogue_response":"I acknowledge the growth case, but price action is not yet confirming.",'
+        '"final_position":{"rating":"strong_sell","confidence":0.0}}'
+    )
+    mock_llm.invoke.return_value = mock_response
+
+    with patch("nodes.technical_debate_node.ChatGoogleGenerativeAI", return_value=mock_llm), patch(
+        "nodes.technical_debate_node.os.getenv",
+        return_value="fake-key",
+    ):
+        result = technical_debate_node(state)
+
+    sig = result["analyst_signals"]["technical"]
+    assert sig["deterministic_decision"]["final_position"]["rating"] == sig["rating"]
+    assert sig["deterministic_decision"]["final_position"]["confidence"] == sig["confidence"]

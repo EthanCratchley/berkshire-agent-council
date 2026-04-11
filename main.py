@@ -15,6 +15,7 @@ from nodes.macro_debate_node import macro_debate_node
 from nodes.technical_debate_node import technical_debate_node
 from nodes.synthesizer_node import synthesizer_node
 from nodes.classical_models_node import classical_models_node
+from nodes.visualization_node import visualization_node
 from orchestration.orchestrator import orchestrator
 
 
@@ -69,6 +70,7 @@ workflow.add_node("macro_debate_node", macro_debate_node)
 workflow.add_node("orchestrator", orchestrator)
 workflow.add_node("classical_models_node", classical_models_node)
 workflow.add_node("synthesizer_node", synthesizer_node)
+workflow.add_node("visualization_node", visualization_node)
 
 # Data loading first, then orchestrator controls the full flow.
 workflow.add_edge(START, "data_fetcher")
@@ -85,7 +87,8 @@ workflow.add_edge("macro_debate_node", "orchestrator")
 
 # Classical models run, then synthesis exits.
 workflow.add_edge("classical_models_node", "synthesizer_node")
-workflow.add_edge("synthesizer_node", END)
+workflow.add_edge("synthesizer_node", "visualization_node")
+workflow.add_edge("visualization_node", END)
 
 workflow.add_conditional_edges(
     "orchestrator",
@@ -161,5 +164,11 @@ if __name__ == "__main__":
             detailed_narrative = final_report.get("detailed_narrative", "")
             if detailed_narrative:
                 print(f"Market Summary: {detailed_narrative}")
+
+            visuals = final_report.get("visualizations", [])
+            if visuals:
+                print("Visualization Artifacts:")
+                for artifact in visuals:
+                    print(f"  - {artifact.get('type', 'artifact')}: {artifact.get('path', '')}")
 
         print("\n" + "=" * 40 + "\n")

@@ -409,7 +409,7 @@ def synthesizer_node(state: BerkshireState):
     print("\n---FINAL SYNTHESIS ---")
     print(f"Ticker: {ticker}")
     print(f"Horizon: {selected_horizon_label}")
-    print(f"LLM Debate:   {final_rating}")
+    print(f"LLM Debate:   {final_rating.upper()}")
     if classical_rf:
         print(f"Random Forest: {classical_rf.get('prediction', 'N/A')}")
     if classical_knn:
@@ -437,7 +437,7 @@ def synthesizer_node(state: BerkshireState):
             "horizon_label": selected_horizon_label,
             "horizon_weights": analyst_weights,
             "recommendation": voted_recommendation,
-            "llm_recommendation": final_rating,
+            "llm_recommendation": final_rating.upper(),
             "raw_recommendation": raw_final_rating,
             "vote": vote,
             "weighted_score": round(weighted_score, 3),

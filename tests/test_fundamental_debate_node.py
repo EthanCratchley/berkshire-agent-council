@@ -61,3 +61,62 @@ def test_fundamental_debate_node_preserves_quant_and_adds_narrative():
     assert isinstance(sig["position_changed"], bool)
     assert isinstance(sig["counterpoints_addressed"], list)
     assert "Fundamental explanation" in sig["details"]
+    assert "deterministic_decision" in sig
+
+
+def test_fundamental_debate_deterministic_policy_not_overridden_by_llm():
+    state = {
+        "ticker": "AAPL",
+        "horizon": "short",
+        "data": {},
+        "analyst_signals": {
+            "fundamental": {
+                "rating": "buy",
+                "confidence": 0.6,
+                "features": {
+                    "pe_ratio": 20.0,
+                    "debt_to_equity": 40.0,
+                    "profit_margin": 0.18,
+                    "revenue_growth": 0.08,
+                    "eps": 4.5,
+                },
+                "details": "Baseline fundamental stance.",
+            }
+        },
+        "debate": {
+            "awaiting_response_from": "fundamental",
+            "active_challenge": {
+                "id": "fundamental_vs_sentiment",
+                "severity": 1.4,
+                "action": "revise_or_defend",
+                "reason": "Sentiment is more bullish.",
+                "primary_opponent": "sentiment",
+                "opponent_case": {"analyst": "sentiment", "rating": "strong_buy", "confidence": 0.8},
+                "coalition": {"supporters_of_opponent": [], "partial": []},
+            },
+        },
+        "final_report": {},
+    }
+
+    mock_llm = MagicMock()
+    mock_response = MagicMock()
+    mock_response.content = (
+        '{"explanation":"Fundamentals remain solid with balanced valuation.",'
+        '"claims_conceded":["near-term sentiment tailwind exists"],'
+        '"claims_disputed":["sentiment alone warrants strong_buy"],'
+        '"weighting_statement":"profitability and valuation remain balanced",'
+        '"horizon_alignment_note":"Short horizon still references financial base quality.",'
+        '"dialogue_response":"I acknowledge momentum, but fundamentals still justify a measured stance.",'
+        '"final_position":{"rating":"strong_sell","confidence":0.01}}'
+    )
+    mock_llm.invoke.return_value = mock_response
+
+    with patch("nodes.fundamental_debate_node.ChatGoogleGenerativeAI", return_value=mock_llm), patch(
+        "nodes.fundamental_debate_node.os.getenv",
+        return_value="fake-key",
+    ):
+        result = fundamental_debate_node(state)
+
+    sig = result["analyst_signals"]["fundamental"]
+    assert sig["deterministic_decision"]["final_position"]["rating"] == sig["rating"]
+    assert sig["deterministic_decision"]["final_position"]["confidence"] == sig["confidence"]

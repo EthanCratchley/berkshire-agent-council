@@ -69,6 +69,7 @@ Thumbs.db
 *.log
 *.tmp
 *.temp
+outputs
 
 # ML model items — tracked (needed to run without retraining)
 # *.pkl
