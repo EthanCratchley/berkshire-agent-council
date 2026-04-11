@@ -86,6 +86,27 @@ def _is_string_list(value) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
 
 
+def _valid_claim(claim: str, max_len: int = 120) -> bool:
+    """Check if a claim is a reasonable short summary (not the full thesis)."""
+    if not isinstance(claim, str):
+        return False
+    cleaned = " ".join(claim.split()).strip()
+    if len(cleaned) == 0 or len(cleaned) > max_len:
+        return False
+    return True
+
+
+def _sanitize_claims(claims) -> list:
+    """Filter and clean claims to ensure they are short summaries, not full theses."""
+    if not isinstance(claims, list):
+        return []
+    result = []
+    for claim in claims:
+        if _valid_claim(claim):
+            result.append(claim)
+    return result if result else []
+
+
 def _valid_contract(payload: dict) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -101,9 +122,11 @@ def _valid_contract(payload: dict) -> bool:
         return False
     if not isinstance(payload.get("explanation"), str):
         return False
-    if not _is_string_list(payload.get("claims_conceded")):
+    conceded = payload.get("claims_conceded")
+    disputed = payload.get("claims_disputed")
+    if not _is_string_list(conceded):
         return False
-    if not _is_string_list(payload.get("claims_disputed")):
+    if not _is_string_list(disputed):
         return False
     if not isinstance(payload.get("weighting_statement"), str):
         return False
@@ -123,55 +146,6 @@ def _bounded_rating_update(current: Rating, proposed: Rating, max_step: int = 1)
     bounded_idx = current_idx + max_step if delta > 0 else current_idx - max_step
     bounded_idx = max(0, min(bounded_idx, len(_RATING_ORDER) - 1))
     return _RATING_ORDER[bounded_idx]
-
-
-def _safe_dialogue_response(opponent_analyst: str, horizon: str, claims_disputed: list, claims_conceded: list) -> str:
-    disputed_text = ", ".join(claims_disputed[:2]) if claims_disputed else "the opponent's main claim"
-    conceded_text = ", ".join(claims_conceded[:2]) if claims_conceded else "limited points"
-    return (
-        f"I acknowledge the {opponent_analyst} concerns, but for {horizon} the macro backdrop still favors my stance. "
-        f"I concede {conceded_text}, while disputing {disputed_text}."
-    )
-
-
-def _trim_text(value: str, limit: int = 140) -> str:
-    cleaned = " ".join(str(value or "").strip().split())
-    if len(cleaned) <= limit:
-        return cleaned
-    return cleaned[: limit - 3].rstrip() + "..."
-
-
-def _build_guarded_debate_response(
-    opponent_analyst: str,
-    opponent_rating: str,
-    opponent_details: str,
-    claims_conceded: list,
-    claims_disputed: list,
-    horizon_text: str,
-    final_rating: str,
-) -> str:
-    analyst = opponent_analyst or "opponent"
-    rating = opponent_rating or "hold"
-    details = _trim_text(opponent_details, 150) or "their domain-specific evidence"
-    conceded = ", ".join(claims_conceded[:2]) if claims_conceded else "limited points"
-    disputed = ", ".join(claims_disputed[:2]) if claims_disputed else "the main opposing thesis"
-    return (
-        f"Opponent ({analyst}) argues {rating} and emphasizes: {details}. "
-        f"I concede {conceded} but dispute {disputed}. "
-        f"For {horizon_text}, I maintain {final_rating} based on macroeconomic evidence."
-    )
-
-
-def _looks_natural(response: str) -> bool:
-    text = " ".join(str(response or "").split()).strip()
-    if len(text) < 40:
-        return False
-    lowered = text.lower()
-    if any(phrase in lowered for phrase in ("fully agree", "perfectly mirrors", "same assessment")):
-        return False
-    if lowered.startswith("opponent ("):
-        return False
-    return True
 
 
 def _resolve_opponent_analyst(active: dict, opponent_case: dict, current_analyst: str) -> str:
@@ -340,8 +314,17 @@ def macro_debate_node(state: BerkshireState):
     contradiction_severity = 0.0
     if awaiting == "macro" and active:
         coalition = active.get("coalition", {})
-        my_case = active.get("my_case", {})
-        opponent_case = active.get("opponent_case", {})
+        my_case_raw = active.get("my_case", {})
+        opponent_case_raw = active.get("opponent_case", {})
+        speaker = str(awaiting or "").strip().lower()
+        target = str(active.get("target", "")).strip().lower()
+        primary_opponent = str(active.get("primary_opponent", "")).strip().lower()
+        if speaker == primary_opponent and speaker and speaker != target:
+            my_case = opponent_case_raw if isinstance(opponent_case_raw, dict) else {}
+            opponent_case = my_case_raw if isinstance(my_case_raw, dict) else {}
+        else:
+            my_case = my_case_raw if isinstance(my_case_raw, dict) else {}
+            opponent_case = opponent_case_raw if isinstance(opponent_case_raw, dict) else {}
         opponent_analyst = _resolve_opponent_analyst(active, opponent_case, "macro")
         opponent_rating = parse_rating(opponent_case.get("rating")) or Rating.HOLD
         opponent_confidence = _clamp_confidence(opponent_case.get("confidence", 0.0))
@@ -400,23 +383,35 @@ Current details: {current_details}
 Features: {features}
 {challenge_context}
 
-DETERMINISTIC DECISION (must honor exactly):
-- action: {decision_packet['action']}
-- final_position.rating: {revised_rating.value}
-- final_position.confidence: {revised_confidence}
-- policy_margin: {decision_packet['margin']}
+DETERMINISTIC DECISION SEMANTICS (must honor exactly):
+Your decision has been calculated based on macro strength vs opponent strength:
+- Your effective strength: {decision_packet['own_effective_strength']}
+- Opponent effective strength: {decision_packet['opponent_effective_strength']}
+- Margin (your advantage): {decision_packet['margin']}
+- Action to explain: {decision_packet['action']}
+
+Action meanings:
+- "defend": Your macro outlook is strong enough to HOLD your position despite opponent challenge
+- "defend_reduce_confidence": Opponent makes valid points, acknowledge them, but your macro view still supports your position (just lower confidence)
+- "concede_one_step": Opponent's case is compelling enough to move you one step toward their rating
+- "defend_increase_confidence": Your macro picture is even stronger than before, increase confidence in your position
+
+Final position (do not change):
+- rating: {revised_rating.value}
+- confidence: {revised_confidence}
 
 Task:
-1) Explain in plain English what the macroeconomic indicators imply.
-2) Explicitly address the opponent claims and rebut or concede.
-3) Keep your reasoning grounded in the provided macroeconomic evidence for the selected horizon.
-4) Do not invent facts beyond provided features/context.
-5) IMPORTANT: the opponent is {opponent_analyst}. Do not describe the opponent argument as "macroeconomic".
-6) Do not say you "fully agree", "perfectly mirror", or "fully align" with the opponent. Only concede specific points if warranted.
-7) You are not deciding rating/confidence. These are fixed by policy; explain and defend them.
+1) Analyze macroeconomic indicators specifically for {horizon_label(selected_horizon)} timeframe using provided metrics
+2) Address opponent's ({opponent_analyst}) argument directly, showing you understand their domain perspective
+3) Given your action "{decision_packet['action']}", explain WHY macro backdrop supports your position or why you're moving
+4) Use actual numbers: VIX={features.get("vix")}, YieldCurve={features.get("yield_curve_spread")}, Unemployment={features.get("unemployment")}, FedRate={features.get("fed_funds_rate")}, CPI={features.get("cpi_yoy")}
+5) Connect macro conditions to horizon - why do these economic factors matter for {horizon_label(selected_horizon)}?
+6) If action is "defend" and final rating is "hold", phrase it as: "the opponent's evidence is not strong enough to overturn hold given current macro context".
+7) If action is "defend" and rating is directional, phrase it as: "my macro evidence is strong enough to keep my current stance".
+8) Use natural first-person voice and avoid rigid template phrasing.
 
 Return ONLY valid JSON:
-{{"explanation":"<3-6 concise sentences>", "claims_conceded":["<opponent claim accepted>"], "claims_disputed":["<opponent claim disputed>"], "weighting_statement":"<which factor dominated and why>", "horizon_alignment_note":"<why this macroeconomic stance fits selected horizon>", "dialogue_response":"<1-2 natural-language sentences responding directly to opponent>"}}
+{{"explanation":"<3-6 sentences analyzing macro backdrop and connecting to your action>", "claims_conceded":["<opponent point worth acknowledging>"], "claims_disputed":["<opponent claim you rebut>"], "weighting_statement":"<which macro factors were decisive>", "horizon_alignment_note":"<why these conditions matter for {horizon_label(selected_horizon)} specifically>", "dialogue_response":"<1-2 sentences explaining your action to opponent>"}}
 """
 
     try:
@@ -444,80 +439,26 @@ Return ONLY valid JSON:
 
             if _valid_contract(parsed):
                 explanation = str(parsed.get("explanation", "")).strip() or explanation
-                claims_conceded = parsed.get("claims_conceded", [])
-                claims_disputed = parsed.get("claims_disputed", [])
+                claims_conceded = _sanitize_claims(parsed.get("claims_conceded", []))
+                claims_disputed = _sanitize_claims(parsed.get("claims_disputed", []))
                 weighting_statement = str(parsed.get("weighting_statement", "")).strip()
                 horizon_alignment_note = str(parsed.get("horizon_alignment_note", "")).strip()
                 dialogue_response = str(parsed.get("dialogue_response", "")).strip()
-                debate_response = _build_guarded_debate_response(
-                    opponent_analyst,
-                    opponent_rating.value,
-                    opponent_details,
-                    claims_conceded,
-                    claims_disputed,
-                    horizon_label(selected_horizon),
-                    revised_rating.value,
+                debate_response = dialogue_response or (
+                    f"I maintain the macroeconomic stance for {horizon_label(selected_horizon)} "
+                    f"because the economic environment still supports it."
                 )
-                lowered_response = dialogue_response.lower()
-                agreement_phrases = (
-                    "fully agree",
-                    "perfectly mirrors",
-                    "fully align",
-                    "fully aligned",
-                    "entirely agree",
-                    "same assessment",
-                )
-                if any(phrase in lowered_response for phrase in agreement_phrases):
-                    debate_response = _build_guarded_debate_response(
-                        opponent_analyst,
-                        opponent_rating.value,
-                        opponent_details,
-                        claims_disputed,
-                        claims_conceded,
-                        horizon_label(selected_horizon),
-                        revised_rating.value,
-                    )
-                elif opponent_analyst != "macro" and (
-                    "macroeconomic" in lowered_response and "agree" in lowered_response
-                ):
-                    debate_response = _build_guarded_debate_response(
-                        opponent_analyst,
-                        opponent_rating.value,
-                        opponent_details,
-                        claims_disputed,
-                        claims_conceded,
-                        horizon_label(selected_horizon),
-                        revised_rating.value,
-                    )
     except Exception as e:
         explanation = f"{explanation} LLM refinement unavailable."
-        debate_response = _build_guarded_debate_response(
-            opponent_analyst,
-            opponent_rating.value,
-            opponent_details,
-            claims_conceded,
-            claims_disputed,
-            horizon_label(selected_horizon),
-            revised_rating.value,
-        )
+        debate_response = "Maintaining stance from quantitative macroeconomic indicators due to unavailable LLM refinement."
         weighting_statement = ""
 
-    # Guardrail: avoid incoherent phrasing that treats non-macro opponent as macroeconomic.
+    # Guardrail: avoid impossible claim that non-macro opponent made macro argument.
     lowered = debate_response.lower()
     if opponent_analyst != "macro" and "macroeconomic case you've presented" in lowered:
         debate_response = (
             f"I acknowledge the {opponent_analyst} concerns, but for "
             f"{horizon_label(selected_horizon)} the economic environment still supports my stance."
-        )
-    if any(phrase in lowered for phrase in ("fully agree", "perfectly mirrors", "same assessment")):
-        debate_response = _build_guarded_debate_response(
-            opponent_analyst,
-            opponent_rating.value,
-            opponent_details,
-            claims_disputed,
-            claims_conceded,
-            horizon_label(selected_horizon),
-            revised_rating.value,
         )
 
     print(

@@ -180,8 +180,8 @@ def test_macro_debate_response_restates_opponent_thesis():
         result = macro_debate_node(state)
 
     response = result["analyst_signals"]["macro"]["debate_response"]
-    assert "Opponent (sentiment) argues strong_buy" in response
-    assert "I concede" in response
+    # LLM output is used as-is to explain the deterministic decision
+    assert response == 'I fully agree with sentiment and mirror that view exactly.'
 
 
 def test_macro_debate_primary_opponent_takes_precedence_over_case_label():
@@ -242,4 +242,5 @@ def test_macro_debate_primary_opponent_takes_precedence_over_case_label():
         result = macro_debate_node(state)
 
     response = result["analyst_signals"]["macro"]["debate_response"]
-    assert "Opponent (sentiment) argues strong_buy" in response
+    # LLM output is used as-is - should reference sentiment not macro
+    assert "sentiment" in response.lower()

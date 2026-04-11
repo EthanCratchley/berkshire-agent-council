@@ -76,34 +76,6 @@ def _valid_contract(payload: dict) -> bool:
     return True
 
 
-def _trim_text(value: str, limit: int = 150) -> str:
-    cleaned = " ".join(str(value or "").strip().split())
-    if len(cleaned) <= limit:
-        return cleaned
-    return cleaned[: limit - 3].rstrip() + "..."
-
-
-def _build_guarded_debate_response(
-    opponent_analyst: str,
-    opponent_rating: str,
-    opponent_details: str,
-    claims_conceded: list,
-    claims_disputed: list,
-    horizon_text: str,
-    final_rating: str,
-) -> str:
-    analyst = opponent_analyst or "opponent"
-    rating = opponent_rating or "hold"
-    details = _trim_text(opponent_details, 150) or "their domain-specific evidence"
-    conceded = ", ".join(claims_conceded[:2]) if claims_conceded else "limited points"
-    disputed = ", ".join(claims_disputed[:2]) if claims_disputed else "the main opposing thesis"
-    return (
-        f"Opponent ({analyst}) argues {rating} and emphasizes: {details}. "
-        f"I concede {conceded} but dispute {disputed}. "
-        f"For {horizon_text}, I maintain {final_rating} based on sentiment evidence."
-    )
-
-
 def _resolve_opponent_analyst(active: dict, opponent_case: dict, current_analyst: str) -> str:
     current = str(current_analyst or "").strip().lower()
     candidates = [active.get("primary_opponent"), active.get("opponent"), opponent_case.get("analyst")]
@@ -153,8 +125,17 @@ def sentiment_node(state: BerkshireState):
     if isinstance(active_challenge, dict) and awaiting == "sentiment":
         is_debate_turn = True
         coalition = active_challenge.get("coalition", {})
-        my_case = active_challenge.get("my_case", {})
-        opponent_case = active_challenge.get("opponent_case", {})
+        my_case_raw = active_challenge.get("my_case", {})
+        opponent_case_raw = active_challenge.get("opponent_case", {})
+        speaker = str(awaiting or "").strip().lower()
+        target = str(active_challenge.get("target", "")).strip().lower()
+        primary_opponent = str(active_challenge.get("primary_opponent", "")).strip().lower()
+        if speaker == primary_opponent and speaker and speaker != target:
+            my_case = opponent_case_raw if isinstance(opponent_case_raw, dict) else {}
+            opponent_case = my_case_raw if isinstance(my_case_raw, dict) else {}
+        else:
+            my_case = my_case_raw if isinstance(my_case_raw, dict) else {}
+            opponent_case = opponent_case_raw if isinstance(opponent_case_raw, dict) else {}
         opponent_analyst = _resolve_opponent_analyst(active_challenge, opponent_case, "sentiment")
         opponent_rating = str(opponent_case.get("rating", "hold"))
         opponent_details = str(opponent_case.get("details", "") or "")
@@ -248,6 +229,12 @@ NEWS ARTICLES:
 {headlines_text}
 {challenge_context}
 
+Debate language requirements:
+- If your stance is unchanged, explain that your sentiment evidence remains strong enough to keep the current stance.
+- If you are at hold, you may say opponent evidence is not strong enough to overturn hold in this horizon context.
+- Use natural first-person language; do not output rigid templates.
+- In debate turns, your opponent is {opponent_analyst}. Do not attribute your own evidence to the opponent.
+
 You MUST respond with ONLY valid JSON in this exact format, no extra text:
 {{"score": <integer 1-10>, "reasoning": "<brief 1-2 sentence explanation>", "claims_conceded": ["<opponent claim accepted>"], "claims_disputed": ["<opponent claim disputed>"], "weighting_statement": "<what factor mattered more and why>", "horizon_alignment_note": "<why this sentiment view matches the selected horizon>", "dialogue_response": "<1-2 natural-language sentences responding directly to opponent>", "final_position": {{"rating":"<strong_buy|buy|hold|sell|strong_sell>", "confidence": <0.0-1.0>}}}}
 """
@@ -328,15 +315,12 @@ You MUST respond with ONLY valid JSON in this exact format, no extra text:
     # Confidence: how far the score is from neutral (5.5), normalized to 0.0-1.0
     confidence = round(abs(score - 5.5) / 4.5, 2)
     confidence = min(confidence, 1.0)
-    debate_response = _build_guarded_debate_response(
-        opponent_analyst,
-        opponent_rating,
-        opponent_details,
-        claims_conceded,
-        claims_disputed,
-        horizon_label(selected_horizon),
-        rating.value,
-    )
+    debate_response = dialogue_response.strip() if isinstance(dialogue_response, str) else ""
+    if is_debate_turn and not debate_response:
+        debate_response = (
+            f"I maintain a {rating.value} sentiment stance for {horizon_label(selected_horizon)} "
+            f"because the current news signal remains supportive."
+        )
 
     # --- Print result for visibility ---
     label = signal.upper()

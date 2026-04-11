@@ -97,6 +97,27 @@ def _is_string_list(value) -> bool:
     return isinstance(value, list) and all(isinstance(item, str) for item in value)
 
 
+def _valid_claim(claim: str, max_len: int = 120) -> bool:
+    """Check if a claim is a reasonable short summary (not the full thesis)."""
+    if not isinstance(claim, str):
+        return False
+    cleaned = " ".join(claim.split()).strip()
+    if len(cleaned) == 0 or len(cleaned) > max_len:
+        return False
+    return True
+
+
+def _sanitize_claims(claims) -> list:
+    """Filter and clean claims to ensure they are short summaries, not full theses."""
+    if not isinstance(claims, list):
+        return []
+    result = []
+    for claim in claims:
+        if _valid_claim(claim):
+            result.append(claim)
+    return result if result else []
+
+
 def _valid_contract(payload: dict) -> bool:
     if not isinstance(payload, dict):
         return False
@@ -112,9 +133,11 @@ def _valid_contract(payload: dict) -> bool:
         return False
     if not isinstance(payload.get("explanation"), str):
         return False
-    if not _is_string_list(payload.get("claims_conceded")):
+    conceded = payload.get("claims_conceded")
+    disputed = payload.get("claims_disputed")
+    if not _is_string_list(conceded):
         return False
-    if not _is_string_list(payload.get("claims_disputed")):
+    if not _is_string_list(disputed):
         return False
     if not isinstance(payload.get("weighting_statement"), str):
         return False
@@ -203,15 +226,6 @@ def _technical_feature_strength(features: dict, selected_horizon: str) -> float:
     if total_weight <= 0:
         return 0.0
     return max(-1.0, min(weighted_sum / total_weight, 1.0))
-
-
-def _safe_dialogue_response(opponent_analyst: str, horizon: str, claims_disputed: list, claims_conceded: list) -> str:
-    disputed_text = ", ".join(claims_disputed[:2]) if claims_disputed else "the opponent's main claim"
-    conceded_text = ", ".join(claims_conceded[:2]) if claims_conceded else "limited points"
-    return (
-        f"I acknowledge the {opponent_analyst} concerns, but for {horizon} the technical setup still supports my stance. "
-        f"I concede {conceded_text}, while disputing {disputed_text}."
-    )
 
 
 def _resolve_opponent_analyst(active: dict, opponent_case: dict, current_analyst: str) -> str:
@@ -329,8 +343,17 @@ def technical_debate_node(state: BerkshireState):
     contradiction_severity = 0.0
     if awaiting == "technical" and active:
         coalition = active.get("coalition", {})
-        my_case = active.get("my_case", {})
-        opponent_case = active.get("opponent_case", {})
+        my_case_raw = active.get("my_case", {})
+        opponent_case_raw = active.get("opponent_case", {})
+        speaker = str(awaiting or "").strip().lower()
+        target = str(active.get("target", "")).strip().lower()
+        primary_opponent = str(active.get("primary_opponent", "")).strip().lower()
+        if speaker == primary_opponent and speaker and speaker != target:
+            my_case = opponent_case_raw if isinstance(opponent_case_raw, dict) else {}
+            opponent_case = my_case_raw if isinstance(my_case_raw, dict) else {}
+        else:
+            my_case = my_case_raw if isinstance(my_case_raw, dict) else {}
+            opponent_case = opponent_case_raw if isinstance(opponent_case_raw, dict) else {}
         opponent_analyst = _resolve_opponent_analyst(active, opponent_case, "technical")
         opponent_rating = parse_rating(opponent_case.get("rating")) or Rating.HOLD
         opponent_confidence = _clamp_confidence(opponent_case.get("confidence", 0.0))
@@ -388,23 +411,34 @@ Current details: {current_details}
 Features: {features}
 {challenge_context}
 
-DETERMINISTIC DECISION (must honor exactly):
-- action: {decision_packet['action']}
-- final_position.rating: {revised_rating.value}
-- final_position.confidence: {revised_confidence}
-- policy_margin: {decision_packet['margin']}
+DETERMINISTIC DECISION SEMANTICS (must honor exactly):
+Your decision has been calculated based on technical strength vs opponent strength:
+- Your effective strength: {decision_packet['own_effective_strength']}
+- Opponent effective strength: {decision_packet['opponent_effective_strength']}
+- Margin (your advantage): {decision_packet['margin']}
+- Action to explain: {decision_packet['action']}
+
+Action meanings:
+- "defend": Your technical picture is strong enough to HOLD your position despite opponent challenge
+- "defend_reduce_confidence": Opponent makes valid points, acknowledge them, but your technicals still support your position (just lower confidence)
+- "concede_one_step": Opponent's case is compelling enough to move you one step toward their rating
+- "defend_increase_confidence": Your technical picture is even stronger than before, increase confidence in your position
+
+Final position (do not change):
+- rating: {revised_rating.value}
+- confidence: {revised_confidence}
 
 Task:
-1) Explain in plain English what the technical analysis indicators imply.
-2) Explicitly address the opponent claims and rebut or concede.
-3) Keep your reasoning grounded in the provided technical price/volume evidence for the selected horizon.
-4) Do not invent facts beyond provided features/context.
-5) IMPORTANT: the opponent is {opponent_analyst}. Do not describe the opponent argument as "technical".
-6) Do not say you "fully agree", "perfectly mirror", or "fully align" with the opponent. Only concede specific points if warranted.
-7) You are not deciding rating/confidence. These are fixed by policy; explain and defend them.
+1) Analyze price action and indicators specifically for {horizon_label(selected_horizon)} timeframe using provided metrics
+2) Address opponent's ({opponent_analyst}) argument directly, showing you understand their domain perspective
+3) Given your action "{decision_packet['action']}", explain WHY technical picture supports your position or why you're moving
+4) Use actual numbers: RSI={features.get("rsi")}, MACD={features.get("macd_histogram")}, Bollinger={features.get("bollinger_pct")}, Volume={features.get("volume_ratio")}, Price_5d={features.get("price_change_5d")}, Price_20d={features.get("price_change_20d")}
+5) Connect technical signals to horizon - why do these patterns matter for {horizon_label(selected_horizon)}?
+6) If action is "defend" and your rating does not change, frame it as: "my technical setup remains strong enough to keep my stance" (not just "opponent evidence is weak").
+7) Use natural first-person voice and avoid rigid template phrasing.
 
 Return ONLY valid JSON:
-{{"explanation":"<3-6 concise sentences>", "claims_conceded":["<opponent claim accepted>"], "claims_disputed":["<opponent claim disputed>"], "weighting_statement":"<which factor dominated and why>", "horizon_alignment_note":"<why this technical stance fits selected horizon>", "dialogue_response":"<1-2 natural-language sentences responding directly to opponent>"}}
+{{"explanation":"<3-6 sentences analyzing price action and connecting to your action>", "claims_conceded":["<opponent point worth acknowledging>"], "claims_disputed":["<opponent claim you rebut>"], "weighting_statement":"<which technical factors were decisive>", "horizon_alignment_note":"<why these technicals matter for {horizon_label(selected_horizon)} specifically>", "dialogue_response":"<1-2 sentences explaining your action to opponent>"}}
 """
 
     try:
@@ -432,8 +466,8 @@ Return ONLY valid JSON:
 
             if _valid_contract(parsed):
                 explanation = str(parsed.get("explanation", "")).strip() or explanation
-                claims_conceded = parsed.get("claims_conceded", [])
-                claims_disputed = parsed.get("claims_disputed", [])
+                claims_conceded = _sanitize_claims(parsed.get("claims_conceded", []))
+                claims_disputed = _sanitize_claims(parsed.get("claims_disputed", []))
                 weighting_statement = str(parsed.get("weighting_statement", "")).strip()
                 horizon_alignment_note = str(parsed.get("horizon_alignment_note", "")).strip()
                 dialogue_response = str(parsed.get("dialogue_response", "")).strip()
@@ -441,40 +475,17 @@ Return ONLY valid JSON:
                     f"I maintain the technical stance for {horizon_label(selected_horizon)} "
                     f"because the core price and volume indicators still support it."
                 )
-                lowered_response = debate_response.lower()
-                agreement_phrases = (
-                    "fully agree",
-                    "perfectly mirrors",
-                    "fully align",
-                    "fully aligned",
-                    "entirely agree",
-                    "same assessment",
-                )
-                if any(phrase in lowered_response for phrase in agreement_phrases):
-                    debate_response = _safe_dialogue_response(
-                        opponent_analyst,
-                        horizon_label(selected_horizon),
-                        claims_disputed,
-                        claims_conceded,
-                    )
     except Exception as e:
         explanation = f"{explanation} LLM refinement unavailable."
         debate_response = "Maintaining stance from quantitative technical indicators due to unavailable LLM refinement."
         weighting_statement = ""
 
-    # Guardrail: avoid incoherent phrasing that treats non-technical opponent as technical.
+    # Guardrail: avoid impossible claim that non-technical opponent made technical argument.
     lowered = debate_response.lower()
     if opponent_analyst != "technical" and "technical case you've presented" in lowered:
         debate_response = (
             f"I acknowledge the {opponent_analyst} concerns, but for "
             f"{horizon_label(selected_horizon)} the price action still supports my stance."
-        )
-    if any(phrase in lowered for phrase in ("fully agree", "perfectly mirrors", "same assessment")):
-        debate_response = _safe_dialogue_response(
-            opponent_analyst,
-            horizon_label(selected_horizon),
-            claims_disputed,
-            claims_conceded,
         )
 
     print(

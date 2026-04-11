@@ -9,6 +9,7 @@ comparison summary.
 
 import os
 import sys
+import json
 
 import joblib
 import numpy as np
@@ -64,6 +65,59 @@ def _print_confusion_matrix(y_true, y_pred, labels, title):
     for i, row_label in enumerate(labels):
         row_vals = "".join(f"{v:>12}" for v in cm[i])
         print(f"  {row_label:>12}{row_vals}")
+
+
+def _to_direction(label: str) -> str:
+    label_upper = str(label).strip().upper()
+    if label_upper in ("BUY", "STRONG BUY"):
+        return "bullish"
+    if label_upper in ("SELL", "STRONG SELL"):
+        return "bearish"
+    return "neutral"
+
+
+def _write_eval_metrics(horizon: str, test_df, y_test, results: dict):
+    """Write compact per-horizon evaluation metrics for downstream visualization."""
+    if not isinstance(results, dict) or ("rf" not in results and "knn" not in results):
+        return
+
+    payload = {
+        "horizon": horizon,
+        "n_test": int(len(y_test)),
+        "test_date_min": str(test_df["date"].min()) if "date" in test_df else "",
+        "test_date_max": str(test_df["date"].max()) if "date" in test_df else "",
+        "source": "evaluate.py_holdout_80_20",
+        "rf": {},
+        "knn": {},
+    }
+
+    y_dir = np.array([_to_direction(y) for y in y_test])
+
+    rf_preds = results.get("rf", {}).get("predictions")
+    if rf_preds is not None:
+        rf_dir = np.array([_to_direction(y) for y in rf_preds])
+        payload["rf"] = {
+            "accuracy": round(float(results["rf"].get("accuracy", 0.0)), 4),
+            "weighted_f1": round(float(results["rf"].get("weighted_f1", 0.0)), 4),
+            "directional_accuracy": round(float((rf_dir == y_dir).mean()), 4),
+        }
+
+    knn_preds = results.get("knn", {}).get("predictions")
+    if knn_preds is not None:
+        knn_dir = np.array([_to_direction(y) for y in knn_preds])
+        payload["knn"] = {
+            "accuracy": round(float(results["knn"].get("accuracy", 0.0)), 4),
+            "weighted_f1": round(float(results["knn"].get("weighted_f1", 0.0)), 4),
+            "directional_accuracy": round(float((knn_dir == y_dir).mean()), 4),
+        }
+
+    if rf_preds is not None and knn_preds is not None and len(rf_preds) == len(knn_preds):
+        payload["rf_knn_agreement"] = round(float((rf_preds == knn_preds).mean()), 4)
+
+    out_path = os.path.join(MODEL_DIR, f"classical_eval_{horizon}.json")
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    print(f"\nSaved evaluation metrics: {out_path}")
 
 
 def evaluate_horizon(horizon: str):
@@ -173,6 +227,7 @@ def evaluate_horizon(horizon: str):
             w = "RF" if rf_class_f1 > knn_class_f1 else ("KNN" if knn_class_f1 > rf_class_f1 else "Tie")
             print(f"{label:<14} {rf_class_f1:>8.3f} {knn_class_f1:>8.3f} {w:>8}")
 
+    _write_eval_metrics(horizon, test_df, y_test, results)
     results["y_test"] = y_test
     return results
 
